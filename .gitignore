@@ -1,0 +1,34 @@
+# Telegram session files (NEVER commit - contain login credentials)
+*.session
+*.session-journal
+session_data/
+
+# Transferred messages database (runtime data - will be created automatically)
+transferred_messages.json
+
+# Downloaded media (temporary files)
+telegram_downloads/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

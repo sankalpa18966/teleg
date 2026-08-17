@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Telegram Media Transfer</title>
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            max-width: 600px;
+            width: 100%;
+            padding: 40px;
+        }
+        
+        h1 {
+            color: #667eea;
+            text-align: center;
+            margin-bottom: 10px;
+            font-size: 28px;
+        }
+        
+        .subtitle {
+            text-align: center;
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 14px;
+        }
+        
+        .channel-info {
+            background: #f5f7fa;
+            border-radius: 10px;
+            padding: 15px;
+            margin-bottom: 20px;
+            font-size: 13px;
+        }
+        
+        .channel-info strong {
+            color: #667eea;
+        }
+        
+        .login-section, .transfer-section {
+            margin-bottom: 20px;
+        }
+        
+        .input-group {
+            margin-bottom: 15px;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 5px;
+            color: #333;
+            font-weight: 500;
+            font-size: 14px;
+        }
+        
+        input {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: border 0.3s;
+        }
+        
+        input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        button {
+            width: 100%;
+            padding: 14px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            margin-top: 10px;
+        }
+        
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
+        }
+        
+        .btn-success {
+            background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+            color: white;
+        }
+        
+        .btn-success:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(56, 239, 125, 0.4);
+        }
+        
+        .btn-danger {
+            background: linear-gradient(135deg, #eb3349 0%, #f45c43 100%);
+            color: white;
+        }
+        
+        .btn-danger:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(235, 51, 73, 0.4);
+        }
+        
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none !important;
+        }
+        
+        .status-box {
+            background: #f5f7fa;
+            border-radius: 10px;
+            padding: 20px;
+            margin: 20px 0;
+            min-height: 100px;
+        }
+        
+        .status-message {
+            color: #333;
+            font-size: 14px;
+            margin-bottom: 15px;
+            text-align: center;
+        }
+        
+        .progress-container {
+            margin: 20px 0;
+        }
+        
+        .progress-bar {
+            width: 100%;
+            height: 30px;
+            background: #e0e0e0;
+            border-radius: 15px;
+            overflow: hidden;
+            position: relative;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            width: 0%;
+            transition: width 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+            font-size: 12px;
+        }
+        
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 10px;
+            margin-top: 15px;
+        }
+        
+        .stat-item {
+            text-align: center;
+            padding: 10px;
+            background: white;
+            border-radius: 8px;
+        }
+        
+        .stat-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #667eea;
+        }
+        
+        .stat-label {
+            font-size: 11px;
+            color: #666;
+            margin-top: 5px;
+        }
+        
+        .hidden {
+            display: none;
+        }
+        
+        .alert {
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            font-size: 14px;
+        }
+        
+        .alert-success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        
+        .alert-error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        
+        .alert-info {
+            background: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        
+        .loading {
+            animation: pulse 1.5s ease-in-out infinite;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📱 Telegram Media Transfer</h1>
+        <p class="subtitle">Transfer media from one channel to another with progress tracking</p>
+        
+        <div class="channel-info">
+            <div><strong>Source Channel:</strong> {{ source_channel }}</div>
+            <div><strong>Target Channel:</strong> {{ target_channel }}</div>
+        </div>
+        
+        <!-- Login Section -->
+        <div id="loginSection" class="login-section {% if logged_in %}hidden{% endif %}">
+            <div id="codeStep">
+                <div class="alert alert-info">
+                    Click "Send Code" to receive verification code on Telegram
+                </div>
+                <button onclick="sendCode()" class="btn-primary" id="sendCodeBtn">
+                    📨 Send Verification Code
+                </button>
+            </div>
+            
+            <div id="verifyStep" class="hidden">
+                <div class="input-group">
+                    <label for="code">Verification Code</label>
+                    <input type="text" id="code" placeholder="Enter code from Telegram" maxlength="5">
+                </div>
+                <div class="input-group">
+                    <label for="password">2FA Password (if enabled)</label>
+                    <input type="password" id="password" placeholder="Leave empty if not using 2FA">
+                </div>
+                <button onclick="verifyCode()" class="btn-primary" id="verifyBtn">
+                    ✅ Verify & Login
+                </button>
+            </div>
+        </div>
+        
+        <!-- Transfer Section -->
+        <div id="transferSection" class="transfer-section {% if not logged_in %}hidden{% endif %}">
+            <div class="alert alert-success">
+                ✅ Logged in successfully! Ready to transfer media.
+            </div>
+            
+            <div class="status-box">
+                <div class="status-message" id="statusMessage">Ready to start transfer</div>
+                
+                <div class="progress-container" id="progressContainer" style="display: none;">
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="progressFill">0%</div>
+                    </div>
+                    
+                    <div class="stats">
+                        <div class="stat-item">
+                            <div class="stat-value" id="currentStat">0</div>
+                            <div class="stat-label">Current</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-value" id="successStat">0</div>
+                            <div class="stat-label">Success</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-value" id="skippedStat">0</div>
+                            <div class="stat-label">Skipped</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-value" id="failedStat">0</div>
+                            <div class="stat-label">Failed</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <button onclick="startTransfer()" class="btn-success" id="startBtn">
+                🚀 Start Transfer
+            </button>
+            <button onclick="stopTransfer()" class="btn-danger hidden" id="stopBtn">
+                ⏸️ Stop Transfer
+            </button>
+        </div>
+    </div>
+    
+    <script>
+        const socket = io();
+        let isTransferring = false;
+        
+        // Socket connection
+        socket.on('connect', () => {
+            console.log('Connected to server');
+        });
+        
+        // Status updates
+        socket.on('status_update', (data) => {
+            updateStatus(data);
+        });
+        
+        async function sendCode() {
+            const btn = document.getElementById('sendCodeBtn');
+            btn.disabled = true;
+            btn.textContent = '⏳ Sending...';
+            
+            try {
+                const response = await fetch('/api/login', { method: 'POST' });
+                const data = await response.json();
+                
+                if (data.status === 'code_sent') {
+                    document.getElementById('codeStep').classList.add('hidden');
+                    document.getElementById('verifyStep').classList.remove('hidden');
+                    showAlert('success', data.message);
+                } else if (data.status === 'logged_in') {
+                    showLoggedIn();
+                }
+            } catch (error) {
+                showAlert('error', 'Error: ' + error.message);
+                btn.disabled = false;
+                btn.textContent = '📨 Send Verification Code';
+            }
+        }
+        
+        async function verifyCode() {
+            const code = document.getElementById('code').value;
+            const password = document.getElementById('password').value;
+            
+            if (!code) {
+                showAlert('error', 'Please enter verification code');
+                return;
+            }
+            
+            const btn = document.getElementById('verifyBtn');
+            btn.disabled = true;
+            btn.textContent = '⏳ Verifying...';
+            
+            try {
+                const response = await fetch('/api/verify', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ code, password })
+                });
+                
+                const data = await response.json();
+                
+                if (data.status === 'success') {
+                    showLoggedIn();
+                } else if (data.status === 'password_required') {
+                    showAlert('error', '2FA password required');
+                    btn.disabled = false;
+                    btn.textContent = '✅ Verify & Login';
+                } else {
+                    showAlert('error', data.message);
+                    btn.disabled = false;
+                    btn.textContent = '✅ Verify & Login';
+                }
+            } catch (error) {
+                showAlert('error', 'Error: ' + error.message);
+                btn.disabled = false;
+                btn.textContent = '✅ Verify & Login';
+            }
+        }
+        
+        function showLoggedIn() {
+            document.getElementById('loginSection').classList.add('hidden');
+            document.getElementById('transferSection').classList.remove('hidden');
+        }
+        
+        async function startTransfer() {
+            try {
+                const response = await fetch('/api/start', { method: 'POST' });
+                const data = await response.json();
+                
+                if (data.status === 'success') {
+                    isTransferring = true;
+                    document.getElementById('startBtn').classList.add('hidden');
+                    document.getElementById('stopBtn').classList.remove('hidden');
+                    document.getElementById('progressContainer').style.display = 'block';
+                } else {
+                    showAlert('error', data.message);
+                }
+            } catch (error) {
+                showAlert('error', 'Error: ' + error.message);
+            }
+        }
+        
+        async function stopTransfer() {
+            try {
+                await fetch('/api/stop', { method: 'POST' });
+                isTransferring = false;
+                document.getElementById('startBtn').classList.remove('hidden');
+                document.getElementById('stopBtn').classList.add('hidden');
+            } catch (error) {
+                showAlert('error', 'Error: ' + error.message);
+            }
+        }
+        
+        function updateStatus(data) {
+            document.getElementById('statusMessage').textContent = data.message;
+            
+            if (data.total > 0) {
+                const percentage = Math.round((data.current / data.total) * 100);
+                document.getElementById('progressFill').style.width = percentage + '%';
+                document.getElementById('progressFill').textContent = percentage + '%';
+            }
+            
+            document.getElementById('currentStat').textContent = data.current;
+            document.getElementById('successStat').textContent = data.success;
+            document.getElementById('skippedStat').textContent = data.skipped;
+            document.getElementById('failedStat').textContent = data.failed;
+            
+            if (!data.is_running && isTransferring) {
+                isTransferring = false;
+                document.getElementById('startBtn').classList.remove('hidden');
+                document.getElementById('stopBtn').classList.add('hidden');
+            }
+        }
+        
+        function showAlert(type, message) {
+            // Simple alert for now
+            alert(message);
+        }
+    </script>
+</body>
+</html>

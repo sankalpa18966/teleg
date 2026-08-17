@@ -30,15 +30,16 @@ if isinstance(SOURCE_CHANNEL, str) and SOURCE_CHANNEL.lstrip('-').isdigit():
 if isinstance(TARGET_CHANNEL, str) and TARGET_CHANNEL.lstrip('-').isdigit():
     TARGET_CHANNEL = int(TARGET_CHANNEL)
 
-# Download directory
 DOWNLOAD_DIR = 'telegram_downloads'
 
-# Database file to track transferred messages
-TRANSFERRED_DB = 'transferred_messages.json'
+SESSION_DIR = 'session_data'
+os.makedirs(SESSION_DIR, exist_ok=True)
+SESSION_PATH = os.path.join(SESSION_DIR, 'session')
+TRANSFERRED_DB = os.path.join(SESSION_DIR, 'transferred_messages.json')
 
 class TelegramMediaTransfer:
     def __init__(self, api_id, api_hash, phone):
-        self.client = TelegramClient('session', api_id, api_hash)
+        self.client = TelegramClient(SESSION_PATH, api_id, api_hash)
         self.phone = phone
         self.transferred_messages = self.load_transferred_db()
         

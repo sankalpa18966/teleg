@@ -17,18 +17,14 @@ services:
       - DELAY=3
       - DELETE_AFTER_UPLOAD=True
     
-    # Mount volumes to persist session data
+    # Mount volumes to persist session data and downloads
     volumes:
       - ./session_data:/app/session_data
       - ./telegram_downloads:/app/telegram_downloads
-      - ./transferred_messages.json:/app/transferred_messages.json
     
     # Expose port 3000 for web UI
     ports:
       - "3000:3000"
-    
-    # Network configuration (no ports needed since it's not a web service)
-    network_mode: bridge
     
     # Optional: Set resource limits
     deploy:

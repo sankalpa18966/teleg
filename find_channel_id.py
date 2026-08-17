@@ -4,6 +4,7 @@ Telegram Channel ID Finder
 """
 
 from telethon import TelegramClient
+import os
 import asyncio
 
 # API credentials - telegram_media_transfer.py එකේ දාපු credentials මෙහෙත් දාන්න
@@ -11,9 +12,13 @@ API_ID = '33864150'
 API_HASH = '0938f04741c164281a160dd7099e4025'
 PHONE = '+94714527083'
 
+SESSION_DIR = 'session_data'
+os.makedirs(SESSION_DIR, exist_ok=True)
+SESSION_PATH = os.path.join(SESSION_DIR, 'session')
+
 
 async def find_channels():
-    client = TelegramClient('session', API_ID, API_HASH)
+    client = TelegramClient(SESSION_PATH, API_ID, API_HASH)
     
     await client.start(phone=PHONE)
     print("✅ Successfully logged in!\n")

@@ -38,8 +38,26 @@ PHONE = os.getenv('PHONE', '+94714527083')
 SOURCE_CHANNEL = int(os.getenv('SOURCE_CHANNEL', -1003916408757))
 TARGET_CHANNEL = int(os.getenv('TARGET_CHANNEL', -1004460843642))
 
-TRANSFERRED_DB = 'transferred_messages.json'
+SESSION_DIR = 'session_data'
+os.makedirs(SESSION_DIR, exist_ok=True)
+SESSION_PATH = os.path.join(SESSION_DIR, 'session')
+TRANSFERRED_DB = os.path.join(SESSION_DIR, 'transferred_messages.json')
 DOWNLOAD_DIR = 'telegram_downloads'
+
+# Auto-migrate session & DB files from root directory if they exist
+if os.path.exists('session.session') and not os.path.exists(SESSION_PATH + '.session'):
+    import shutil
+    try:
+        shutil.copy('session.session', SESSION_PATH + '.session')
+    except Exception:
+        pass
+
+if os.path.exists('transferred_messages.json') and not os.path.exists(TRANSFERRED_DB):
+    import shutil
+    try:
+        shutil.copy('transferred_messages.json', TRANSFERRED_DB)
+    except Exception:
+        pass
 
 client = None
 client_loop = None
@@ -239,7 +257,7 @@ def login():
         def do_login():
             global client
             if client is None:
-                client = TelegramClient('session', API_ID, API_HASH)
+                client = TelegramClient(SESSION_PATH, API_ID, API_HASH)
                 run_async(client.connect())
             
             is_authorized = run_async(client.is_user_authorized())
@@ -334,4 +352,4 @@ if __name__ == '__main__':
     
     # Run app on port 3000
     print("🚀 Starting Telegram Media Transfer Web UI on http://0.0.0.0:3000")
-    socketio.run(app, host='0.0.0.0', port=3000, debug=False)
+    socketio.run(app, host='0.0.0.0', port=3000, debug=False, allow_unsafe_werkzeug=True)

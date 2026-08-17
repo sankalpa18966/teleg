@@ -223,19 +223,41 @@ async def transfer_media_async():
         emit_status(f'❌ Error: {str(e)}')
 
 
+def ensure_client():
+    """Ensure TelegramClient is instantiated and connected on client_loop"""
+    global client
+    if client is None:
+        client = TelegramClient(SESSION_PATH, API_ID, API_HASH)
+        run_async(client.connect())
+    return client
+
+
+def check_login_status():
+    """Check if existing session is authorized"""
+    global transfer_status
+    if not transfer_status['logged_in'] and os.path.exists(SESSION_PATH + '.session'):
+        try:
+            ensure_client()
+            if run_async(client.is_user_authorized()):
+                transfer_status['logged_in'] = True
+        except Exception:
+            pass
+
+
 def run_transfer():
-    """Run transfer in new event loop"""
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+    """Run transfer on the client loop to prevent event loop mismatch"""
     try:
-        loop.run_until_complete(transfer_media_async())
-    finally:
-        loop.close()
+        ensure_client()
+        run_async(transfer_media_async())
+    except Exception as e:
+        transfer_status['is_running'] = False
+        emit_status(f'❌ Error: {str(e)}')
 
 
 @app.route('/')
 def index():
     """Main page"""
+    check_login_status()
     return render_template('index.html', 
                          source_channel=SOURCE_CHANNEL,
                          target_channel=TARGET_CHANNEL,
@@ -245,6 +267,7 @@ def index():
 @app.route('/api/status')
 def get_status():
     """Get current transfer status"""
+    check_login_status()
     return jsonify(transfer_status)
 
 
@@ -255,11 +278,7 @@ def login():
     
     try:
         def do_login():
-            global client
-            if client is None:
-                client = TelegramClient(SESSION_PATH, API_ID, API_HASH)
-                run_async(client.connect())
-            
+            ensure_client()
             is_authorized = run_async(client.is_user_authorized())
             if not is_authorized:
                 run_async(client.send_code_request(PHONE))
@@ -285,8 +304,7 @@ def verify_code():
     password = data.get('password', '')
     
     try:
-        if client is None:
-            return jsonify({'status': 'error', 'message': 'Client not initialized'}), 400
+        ensure_client()
         
         def do_verify():
             try:

@@ -32,19 +32,42 @@ LOGIN_LOG = os.path.join(SESSION_DIR, 'login_log.json')
 DOWNLOAD_DIR = 'telegram_downloads'
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-# ── Migrate legacy session file ────────────────────────────────────────────────
-if os.path.exists('session.session') and not os.path.exists(SESSION_PATH + '.session'):
-    import shutil
-    try:
-        shutil.copy('session.session', SESSION_PATH + '.session')
-    except Exception:
-        pass
-if os.path.exists('transferred_messages.json') and not os.path.exists(TRANSFERRED_DB):
-    import shutil
-    try:
-        shutil.copy('transferred_messages.json', TRANSFERRED_DB)
-    except Exception:
-        pass
+# ── Auto-cleaner for temporary downloads ───────────────────────────────────────
+import time
+
+def start_auto_cleaner():
+    """Background thread that automatically purges temp files in telegram_downloads older than 60 seconds."""
+    def _cleaner_loop():
+        # Clean everything on startup
+        if os.path.exists(DOWNLOAD_DIR):
+            for f in os.listdir(DOWNLOAD_DIR):
+                fp = os.path.join(DOWNLOAD_DIR, f)
+                if os.path.isfile(fp):
+                    try:
+                        os.remove(fp)
+                    except Exception:
+                        pass
+
+        while True:
+            try:
+                time.sleep(30)
+                if os.path.exists(DOWNLOAD_DIR):
+                    now = time.time()
+                    for f in os.listdir(DOWNLOAD_DIR):
+                        fp = os.path.join(DOWNLOAD_DIR, f)
+                        if os.path.isfile(fp):
+                            if now - os.path.getmtime(fp) > 60:
+                                try:
+                                    os.remove(fp)
+                                    print(f"🧹 Auto-cleaned temp file from VPS: {f}")
+                                except Exception:
+                                    pass
+            except Exception:
+                pass
+
+    threading.Thread(target=_cleaner_loop, daemon=True).start()
+
+start_auto_cleaner()
 
 # ── Global state ───────────────────────────────────────────────────────────────
 transfer_status = {
@@ -701,6 +724,22 @@ def get_file(filename):
 
     threading.Thread(target=_delayed_cleanup, daemon=True).start()
     return send_file(file_path, mimetype=mime, as_attachment=True, download_name=safe_filename)
+
+
+@app.route('/api/clear_temp', methods=['POST'])
+def clear_temp():
+    """Clear all temporary downloaded files manually."""
+    count = 0
+    if os.path.exists(DOWNLOAD_DIR):
+        for f in os.listdir(DOWNLOAD_DIR):
+            fp = os.path.join(DOWNLOAD_DIR, f)
+            if os.path.isfile(fp):
+                try:
+                    os.remove(fp)
+                    count += 1
+                except Exception:
+                    pass
+    return jsonify({'status': 'success', 'message': f'Cleaned {count} temporary files from VPS'})
 
 
 # ══════════════════════════════════════════════════════════════════════════════

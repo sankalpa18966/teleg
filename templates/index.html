@@ -653,9 +653,14 @@
                 </div>
             </div>
 
-            <button id="downloadBtn" onclick="downloadContent()" class="btn btn-primary" style="margin-top: 10px;">
-                <i class="fa-solid fa-download"></i> Fetch & Download File
-            </button>
+            <div style="display: flex; gap: 10px; margin-top: 10px;">
+                <button id="downloadBtn" onclick="downloadContent()" class="btn btn-primary" style="flex: 1;">
+                    <i class="fa-solid fa-download"></i> Fetch & Download File
+                </button>
+                <button onclick="clearVpsTemp()" class="btn btn-secondary" style="font-size: 13px;" title="Clean temporary files from VPS disk">
+                    <i class="fa-solid fa-broom"></i> Clear VPS Storage
+                </button>
+            </div>
 
             <!-- Link Download / Forward Real-time Progress Card -->
             <div id="linkProgressCard" class="progress-card" style="display: none; margin-top: 20px;">
@@ -1091,6 +1096,18 @@
             } finally {
                 btn.disabled = false;
                 toggleDownloaderAction();
+            }
+        }
+
+        async function clearVpsTemp() {
+            try {
+                const res = await fetch('/api/clear_temp', { method: 'POST' });
+                const data = await res.json();
+                if (res.ok) {
+                    showToast(data.message, 'success');
+                }
+            } catch (err) {
+                showToast('Error: ' + err.message, 'error');
             }
         }
 

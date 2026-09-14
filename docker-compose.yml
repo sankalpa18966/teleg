@@ -1,37 +1,26 @@
 version: '3.8'
 
 services:
-  telegram-transfer:
+  telegram-web-hub:
     build: .
-    container_name: telegram_media_transfer
+    container_name: telegram_web_hub
     restart: unless-stopped
     
-    # Environment variables - EDIT THESE!
-    environment:
-      - API_ID=33864150
-      - API_HASH=0938f04741c164281a160dd7099e4025
-      - PHONE=+94714527083
-      - SOURCE_CHANNEL=-1003916408757
-      - TARGET_CHANNEL=-1004460843642
-      - TRANSFER_LIMIT=  # Leave empty for all messages, or set a number
-      - DELAY=3
-      - DELETE_AFTER_UPLOAD=True
+    ports:
+      - "3000:3000"
     
-    # Mount volumes to persist session data and downloads
     volumes:
       - ./session_data:/app/session_data
       - ./telegram_downloads:/app/telegram_downloads
     
-    # Expose port 3000 for web UI
-    ports:
-      - "3000:3000"
+    environment:
+      - PYTHONUNBUFFERED=1
     
-    # Optional: Set resource limits
     deploy:
       resources:
         limits:
           cpus: '1'
           memory: 1G
         reservations:
-          cpus: '0.5'
-          memory: 512M
+          cpus: '0.2'
+          memory: 256M

@@ -4,34 +4,23 @@ FROM python:3.11-slim
 # Set working directory
 WORKDIR /app
 
-# Install dependencies
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application files
-COPY telegram_media_transfer.py .
-COPY find_channel_id.py .
-COPY web_app.py .
-COPY templates/ ./templates/
+COPY . .
 
-# Create directory for downloads
-RUN mkdir -p telegram_downloads
-
-# Create volume for session files (to persist login)
-VOLUME ["/app/session_data"]
-
-# Set environment variables (these will be overridden by docker-compose or command line)
-ENV API_ID=""
-ENV API_HASH=""
-ENV PHONE=""
-ENV SOURCE_CHANNEL=""
-ENV TARGET_CHANNEL=""
-ENV TRANSFER_LIMIT=""
-ENV DELAY="3"
-ENV DELETE_AFTER_UPLOAD="True"
+# Create directories
+RUN mkdir -p telegram_downloads session_data
 
 # Expose port 3000
 EXPOSE 3000
 
-# Run the web UI
+# Run the Web App UI
 CMD ["python", "-u", "web_app.py"]

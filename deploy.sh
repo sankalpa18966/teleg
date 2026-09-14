@@ -1,62 +1,46 @@
 #!/bin/bash
 
-# VPS Deployment Script
-# මේක VPS එකේ run කරන්න ඕනි
+# Telegram Media Toolkit & Transfer Hub — VPS One-Click Deployment Script
+set -e
 
-set -e  # Exit on error
-
-echo "🚀 Deploying Telegram Media Transfer Service..."
-
-# Variables
-PROJECT_DIR="/root/telegram-transfer"
-
-# Create directory if not exists
-echo "📁 Creating project directory..."
-mkdir -p $PROJECT_DIR
-cd $PROJECT_DIR
+echo "=================================================="
+echo "🚀 Deploying Telegram Media Hub Web App..."
+echo "=================================================="
 
 # Check if Docker is installed
-echo "🐳 Checking Docker installation..."
 if ! command -v docker &> /dev/null; then
-    echo "❌ Docker not found. Installing Docker..."
+    echo "📦 Docker not found. Installing Docker..."
     curl -fsSL https://get.docker.com -o get-docker.sh
     sh get-docker.sh
     rm get-docker.sh
 fi
 
 if ! command -v docker-compose &> /dev/null; then
-    echo "❌ Docker Compose not found. Installing..."
-    apt install docker-compose -y
+    echo "📦 Docker Compose not found. Installing..."
+    apt-get update && apt-get install -y docker-compose
 fi
 
-echo "✅ Docker and Docker Compose are installed"
+echo "✅ Docker and Docker Compose ready!"
 
 # Create necessary directories
-echo "📂 Creating directories..."
 mkdir -p session_data
 mkdir -p telegram_downloads
+chmod -R 755 session_data telegram_downloads
 
-# Set permissions
-chmod -R 755 session_data
-chmod -R 755 telegram_downloads
-
-# Build Docker image
-echo "🔨 Building Docker image..."
-docker-compose build
+# Build and start container
+echo "🔨 Building Docker image and starting service..."
+docker-compose down || true
+docker-compose up -d --build
 
 echo ""
-echo "✅ Deployment complete!"
+echo "=================================================="
+echo "🎉 DEPLOYMENT SUCCESSFUL!"
+echo "=================================================="
+echo "🌐 Open your browser and navigate to:"
+echo "   http://YOUR_VPS_IP:3000"
 echo ""
-echo "Next steps:"
-echo "1. Edit docker-compose.yml with your credentials:"
-echo "   nano docker-compose.yml"
-echo ""
-echo "2. First time login (to verify channels):"
-echo "   docker-compose run --rm telegram-transfer python find_channel_id.py"
-echo ""
-echo "3. Start the service:"
-echo "   docker-compose up -d"
-echo ""
-echo "4. View logs:"
-echo "   docker-compose logs -f"
-echo ""
+echo "📌 Useful Commands:"
+echo "   - View Logs:    docker-compose logs -f"
+echo "   - Restart App:  docker-compose restart"
+echo "   - Stop App:     docker-compose down"
+echo "=================================================="

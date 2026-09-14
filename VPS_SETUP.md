@@ -1,312 +1,94 @@
-# 🚀 VPS Setup Guide - Docker සමඟ
+# 🚀 VPS Deployment Guide — Telegram Hub Web App
 
-VPS IP: **45.77.171.72**
-
-## 📋 Prerequisites
-
-VPS එකේ:
-- Ubuntu/Debian Linux
-- Docker සහ Docker Compose installed
-- SSH access
+මෙම මාර්ගෝපදේශය මගින් ඔබේ Telegram Web Application එක VPS (Virtual Private Server) එකක පහසුවෙන්ම Setup කරගන්නා ආකාරය පියවරෙන් පියවර විස්තර කෙරේ.
 
 ---
 
-## Step 1: VPS එකට Connect වෙන්න
+## 📋 Prerequisites (අවශ්‍ය දෑ)
 
-```bash
-ssh root@45.77.171.72
-```
-
-Password එක enter කරන්න.
+- **Ubuntu / Debian** සහිත ඕනෑම VPS එකක් (e.g. Vultr, DigitalOcean, Hetzner, AWS)
+- VPS එකෙහි **IP Address** සහ **Root Password** (හෝ SSH Key)
 
 ---
 
-## Step 2: Docker Install කරන්න (Install කරලා නැත්නම්)
+## 🛠️ Step 1: VPS එකට Connect වෙන්න
+
+ඔබගේ கணිනියේ Terminal (Command Prompt / PowerShell) එකෙන්:
 
 ```bash
-# Update system
-apt update && apt upgrade -y
-
-# Install Docker
-curl -fsSL https://get.docker.com -o get-docker.sh
-sh get-docker.sh
-
-# Install Docker Compose
-apt install docker-compose -y
-
-# Verify installation
-docker --version
-docker-compose --version
+ssh root@YOUR_VPS_IP
 ```
+*(උදා: `ssh root@45.77.171.72`)*
 
 ---
 
-## Step 3: Project Files Upload කරන්න
+## 📁 Step 2: Files Upload කරන්න
 
-### Option A: SCP/SFTP Use කරන්න (Windows වලින්)
-
-**WinSCP** හෝ **FileZilla** use කරලා files upload කරන්න:
-- Host: `45.77.171.72`
-- Protocol: SFTP
-- Port: 22
-
-Upload කරන්න ඕනි files:
-- `telegram_media_transfer.py`
-- `find_channel_id.py`
-- `requirements.txt`
-- `Dockerfile`
-- `docker-compose.yml`
-- `.dockerignore`
-
-Upload location: `/root/telegram-transfer/`
-
-### Option B: Git Use කරන්න (Recommended)
-
-VPS එකේ:
-
+### 💡 Option A: Git ක්ලෝන් කිරීම (Recommended)
+VPS එක තුළදී:
 ```bash
-# Install git (නැත්නම්)
-apt install git -y
-
-# Create directory
-mkdir -p /root/telegram-transfer
-cd /root/telegram-transfer
-
-# Upload files using git (if you have a repo)
-# git clone YOUR_REPO_URL .
-
-# Or create files manually and paste content
-# nano telegram_media_transfer.py
-# (paste content and save with Ctrl+O, Ctrl+X)
+mkdir -p /root/telegram-app
+cd /root/telegram-app
+# git clone <YOUR_REPO_URL> .
 ```
+
+### 💡 Option B: WinSCP / FileZilla භාවිතයෙන්
+**WinSCP** හෝ **FileZilla** හරහා VPS එකට Connect වී `/root/telegram-app` folder එකට project හි සියලුම files upload කරන්න.
 
 ---
 
-## Step 4: Configure කරන්න
+## 🚀 Step 3: Script එක Run කර Deploy කරන්න
 
-VPS එකේ `docker-compose.yml` file එක edit කරන්න:
+VPS එකේ project folder එකට ගොස් මෙම Command එක ලබාදෙන්න:
 
 ```bash
-cd /root/telegram-transfer
-nano docker-compose.yml
+cd /root/telegram-app
+chmod +x deploy.sh
+./deploy.sh
 ```
 
-Edit කරන්න ඕනි values:
-```yaml
-environment:
-  - API_ID=33864150                    # ඔබේ API ID
-  - API_HASH=0938f04741c164281a160dd7099e4025  # ඔබේ API Hash
-  - PHONE=+94714527083                 # ඔබේ phone number
-  - SOURCE_CHANNEL=-1003916408757      # Source channel ID
-  - TARGET_CHANNEL=-1004460843642      # Target channel ID
-  - TRANSFER_LIMIT=                    # Empty for all, or set number
-  - DELAY=3                            # Delay between uploads
-  - DELETE_AFTER_UPLOAD=True           # Delete local files after upload
-```
-
-Save කරන්න: `Ctrl+O` then `Enter`, Exit: `Ctrl+X`
+මෙම script එක මගින්:
+1. **Docker & Docker Compose** නොමැති නම් automatically install කරයි.
+2. Web app එක Docker container එකක් ලෙස background එකෙහි start කරයි.
 
 ---
 
-## Step 5: Docker Image Build කරන්න
+## 🌐 Step 4: Web UI එකට පිවිසෙන්න
 
-```bash
-cd /root/telegram-transfer
-docker-compose build
+Deployment එක සාර්ථක වූ පසු ඔබේ Browser එකෙන්:
+
 ```
+http://YOUR_VPS_IP:3000
+```
+*(උදා: `http://45.77.171.72:3000`)*
 
-මේක කිපයක් minutes ගතවෙයි.
+### Web UI එක හරහා:
+1. **Tab 1 (Credentials & Login)** එකෙන් ඔබේ **API ID**, **API Hash**, සහ **Phone Number** ඇතුළත් කර Telegram එකට Log වන්න.
+2. **Tab 2 (Find Channel IDs)** එකෙන් ඔබේ සියලුම Channels වල IDs ලබා ගන්න.
+3. **Tab 3 (Media Transfer)** එකෙන් Source & Target Channel IDs දී Transfer එක ආරම්භ කරන්න.
+4. **Tab 4 (Content Downloader)** එකෙන් Telegram Post Link එකක් දී Media Download හෝ Transfer කරගන්න.
 
 ---
 
-## Step 6: පළමු වතාවට Run කරන්න (Login කරන්න)
+## 🎛️ ප්‍රයෝජනවත් Commands (Useful Commands)
 
-```bash
-docker-compose run --rm telegram-transfer python find_channel_id.py
-```
-
-මේක:
-1. Phone verification code එකක් ඉල්ලයි - ඔබේ Telegram app එකෙන් code එක type කරන්න
-2. 2FA password ඉල්ලයි (තියෙනවනම්)
-3. Login වුණාම channels list කරයි
-4. Verify කරන්න SOURCE_CHANNEL සහ TARGET_CHANNEL IDs හරිද කියලා
-
----
-
-## Step 7: Transfer Service Run කරන්න
-
-### Interactive Mode (Test කරන්න):
-
-```bash
-docker-compose up
-```
-
-මේක foreground එකේ run වෙයි, output එක real-time එකේ පෙන්වයි.
-Stop කරන්න: `Ctrl+C`
-
-### Background Mode (Production):
-
-```bash
-docker-compose up -d
-```
-
-මේක background එකේ run වෙයි.
-
----
-
-## 🎛️ Docker Commands
-
-### Logs බලන්න:
+### 📊 Logs පරීක්ෂා කිරීමට:
 ```bash
 docker-compose logs -f
 ```
 
-### Status check කරන්න:
-```bash
-docker-compose ps
-```
-
-### Service නවත්තන්න:
-```bash
-docker-compose down
-```
-
-### Service restart කරන්න:
+### 🔄 App එක Restart කිරීමට:
 ```bash
 docker-compose restart
 ```
 
-### Session files clear කරන්න (re-login):
-```bash
-rm -rf session_data/*.session
-docker-compose restart
-```
-
-### Container එකට shell access:
-```bash
-docker-compose exec telegram-transfer bash
-```
-
----
-
-## 🔄 Auto-Restart Configuration
-
-Service එක automatically restart වෙන්න config කරලා තියෙනවා (`restart: unless-stopped`):
-- Server reboot වුණාම auto-start
-- Crash වුණාම auto-restart
-- Manual stop කරනකන් run වෙනවා
-
----
-
-## 📊 Monitoring
-
-### Real-time logs:
-```bash
-docker-compose logs -f telegram-transfer
-```
-
-### Last 100 lines:
-```bash
-docker-compose logs --tail=100 telegram-transfer
-```
-
-### Resource usage:
-```bash
-docker stats telegram_media_transfer
-```
-
----
-
-## 🛠️ Troubleshooting
-
-### Container restart වෙනවා නම්:
-```bash
-docker-compose logs telegram-transfer
-```
-
-### Session expired නම්:
+### 🛑 App එක නවත්වන්න:
 ```bash
 docker-compose down
-rm -rf session_data/*.session
-docker-compose up
-# Enter verification code again
 ```
 
-### Permission errors:
+### 🔒 Firewall Access (Port 3000 Open කිරීමට අවශ්‍ය නම්):
+VPS එකේ ufw තිබේ නම්:
 ```bash
-chmod -R 777 session_data/
-chmod -R 777 telegram_downloads/
+ufw allow 3000/tcp
 ```
-
-### Disk space full:
-```bash
-# Check disk usage
-df -h
-
-# Clear downloaded files
-rm -rf telegram_downloads/*
-
-# Enable DELETE_AFTER_UPLOAD in docker-compose.yml
-```
-
----
-
-## 🔐 Security Notes
-
-1. **Firewall:** Ports 80, 443, 2005 use කරන්නේ නැහැ, ඒ නිසා firewall rules අවශ්‍ය නැහැ
-2. **Session files:** `session_data/` folder එක secure කරන්න - මේකේ login details තියෙනවා
-3. **Credentials:** `docker-compose.yml` එකේ credentials secure කරන්න
-4. **Backups:** `session_data/` folder එක backup කරන්න re-login වෙන්න වෙන්නේ නැහැ වගේ
-
----
-
-## 📁 File Structure (VPS එකේ)
-
-```
-/root/telegram-transfer/
-├── telegram_media_transfer.py
-├── find_channel_id.py
-├── requirements.txt
-├── Dockerfile
-├── docker-compose.yml
-├── .dockerignore
-├── session_data/              # Auto-created (session files)
-│   └── session.session
-└── telegram_downloads/        # Auto-created (temp downloads)
-    └── (media files)
-```
-
----
-
-## ✅ Quick Start Summary
-
-```bash
-# 1. Connect to VPS
-ssh root@45.77.171.72
-
-# 2. Go to project directory
-cd /root/telegram-transfer
-
-# 3. Build
-docker-compose build
-
-# 4. First run (login)
-docker-compose run --rm telegram-transfer python find_channel_id.py
-
-# 5. Start service
-docker-compose up -d
-
-# 6. Check logs
-docker-compose logs -f
-```
-
----
-
-## 🎉 Done!
-
-Service එක දැන් VPS එකේ background එකේ run වෙනවා!
-
-- Auto-restart enabled
-- Session files persisted
-- Logs viewable anytime
-- No ports exposed (secure)

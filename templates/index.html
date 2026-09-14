@@ -3,460 +3,1056 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Telegram Media Transfer</title>
+    <title>Telegram Media Toolkit & Transfer Hub</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Socket.IO -->
     <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
     <style>
+        :root {
+            --bg-color: #0f172a;
+            --card-bg: rgba(30, 41, 59, 0.7);
+            --card-border: rgba(255, 255, 255, 0.1);
+            --primary: #38bdf8;
+            --primary-hover: #0284c7;
+            --accent: #8b5cf6;
+            --success: #10b981;
+            --danger: #ef4444;
+            --warning: #f59e0b;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --input-bg: #1e293b;
+            --input-border: #334155;
+        }
+
         * {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
         }
-        
+
         body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background-color: var(--bg-color);
+            background-image: 
+                radial-gradient(at 0% 0%, rgba(56, 189, 248, 0.12) 0px, transparent 50%),
+                radial-gradient(at 100% 100%, rgba(139, 92, 246, 0.12) 0px, transparent 50%);
+            background-attachment: fixed;
+            color: var(--text-main);
             min-height: 100vh;
             display: flex;
             justify-content: center;
             align-items: center;
             padding: 20px;
         }
-        
-        .container {
-            background: white;
-            border-radius: 20px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-            max-width: 600px;
+
+        .app-container {
             width: 100%;
-            padding: 40px;
+            max-width: 900px;
+            background: var(--card-bg);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid var(--card-border);
+            border-radius: 24px;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
         }
-        
-        h1 {
-            color: #667eea;
-            text-align: center;
-            margin-bottom: 10px;
-            font-size: 28px;
+
+        header {
+            padding: 30px 40px 20px 40px;
+            border-bottom: 1px solid var(--card-border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
         }
-        
-        .subtitle {
-            text-align: center;
-            color: #666;
-            margin-bottom: 30px;
-            font-size: 14px;
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 15px;
         }
-        
-        .channel-info {
-            background: #f5f7fa;
-            border-radius: 10px;
-            padding: 15px;
-            margin-bottom: 20px;
+
+        .brand-icon {
+            width: 48px;
+            height: 48px;
+            background: linear-gradient(135deg, var(--primary), var(--accent));
+            border-radius: 14px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 22px;
+            color: white;
+            box-shadow: 0 8px 16px rgba(56, 189, 248, 0.3);
+        }
+
+        .brand-text h1 {
+            font-size: 22px;
+            font-weight: 700;
+            letter-spacing: -0.5px;
+        }
+
+        .brand-text p {
             font-size: 13px;
+            color: var(--text-muted);
+            margin-top: 2px;
         }
-        
-        .channel-info strong {
-            color: #667eea;
+
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 14px;
+            border-radius: 9999px;
+            font-size: 12px;
+            font-weight: 600;
+            background: rgba(239, 68, 68, 0.15);
+            color: var(--danger);
+            border: 1px solid rgba(239, 68, 68, 0.3);
         }
-        
-        .login-section, .transfer-section {
+
+        .status-badge.logged-in {
+            background: rgba(16, 185, 129, 0.15);
+            color: var(--success);
+            border-color: rgba(16, 185, 129, 0.3);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: currentColor;
+        }
+
+        /* Navigation Tabs */
+        nav.tabs {
+            display: flex;
+            background: rgba(15, 23, 42, 0.6);
+            padding: 6px;
+            gap: 6px;
+            border-bottom: 1px solid var(--card-border);
+        }
+
+        .tab-btn {
+            flex: 1;
+            padding: 12px 16px;
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            font-size: 14px;
+            font-weight: 500;
+            border-radius: 12px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            transition: all 0.2s ease;
+        }
+
+        .tab-btn:hover {
+            color: var(--text-main);
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .tab-btn.active {
+            color: white;
+            background: linear-gradient(135deg, rgba(56, 189, 248, 0.2), rgba(139, 92, 246, 0.2));
+            border: 1px solid rgba(56, 189, 248, 0.3);
+            font-weight: 600;
+        }
+
+        /* Main Content */
+        .tab-content {
+            padding: 30px 40px;
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+            animation: fadeIn 0.3s ease;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(6px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Form elements */
+        .form-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+
+        .form-group {
             margin-bottom: 20px;
         }
-        
-        .input-group {
-            margin-bottom: 15px;
+
+        .form-group.full-width {
+            grid-column: span 2;
         }
-        
+
         label {
             display: block;
-            margin-bottom: 5px;
-            color: #333;
+            font-size: 13px;
             font-weight: 500;
-            font-size: 14px;
+            color: var(--text-muted);
+            margin-bottom: 8px;
         }
-        
+
         input {
             width: 100%;
-            padding: 12px;
-            border: 2px solid #e0e0e0;
-            border-radius: 8px;
+            padding: 12px 16px;
+            background: var(--input-bg);
+            border: 1px solid var(--input-border);
+            border-radius: 12px;
+            color: white;
             font-size: 14px;
-            transition: border 0.3s;
-        }
-        
-        input:focus {
             outline: none;
-            border-color: #667eea;
+            transition: all 0.2s;
         }
-        
-        button {
-            width: 100%;
-            padding: 14px;
-            border: none;
-            border-radius: 8px;
-            font-size: 16px;
+
+        input:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.2);
+        }
+
+        .btn {
+            padding: 12px 24px;
+            border-radius: 12px;
+            font-size: 14px;
             font-weight: 600;
+            border: none;
             cursor: pointer;
-            transition: all 0.3s;
-            margin-top: 10px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            transition: all 0.2s;
+            text-decoration: none;
         }
-        
+
         .btn-primary {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
+            background: linear-gradient(135deg, var(--primary), var(--primary-hover));
+            color: #0f172a;
+            box-shadow: 0 4px 12px rgba(56, 189, 248, 0.25);
         }
-        
+
         .btn-primary:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
+            transform: translateY(-1px);
+            box-shadow: 0 6px 16px rgba(56, 189, 248, 0.35);
         }
-        
+
         .btn-success {
-            background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+            background: linear-gradient(135deg, #10b981, #059669);
             color: white;
+            box-shadow: 0 4px 12px rgba(16, 185, 129, 0.25);
         }
-        
-        .btn-success:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 5px 20px rgba(56, 239, 125, 0.4);
-        }
-        
+
         .btn-danger {
-            background: linear-gradient(135deg, #eb3349 0%, #f45c43 100%);
+            background: linear-gradient(135deg, #ef4444, #dc2626);
+            color: white;
+            box-shadow: 0 4px 12px rgba(239, 68, 68, 0.25);
+        }
+
+        .btn-secondary {
+            background: #334155;
             color: white;
         }
-        
-        .btn-danger:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 5px 20px rgba(235, 51, 73, 0.4);
+
+        .btn-secondary:hover {
+            background: #475569;
         }
-        
-        button:disabled {
+
+        .btn:disabled {
             opacity: 0.5;
             cursor: not-allowed;
             transform: none !important;
         }
-        
-        .status-box {
-            background: #f5f7fa;
-            border-radius: 10px;
-            padding: 20px;
-            margin: 20px 0;
-            min-height: 100px;
+
+        /* Logs & Tables */
+        .console-box {
+            background: #090d16;
+            border: 1px solid var(--card-border);
+            border-radius: 14px;
+            padding: 16px;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 13px;
+            color: #38bdf8;
+            max-height: 200px;
+            overflow-y: auto;
+            margin-top: 20px;
         }
-        
-        .status-message {
-            color: #333;
-            font-size: 14px;
-            margin-bottom: 15px;
-            text-align: center;
-        }
-        
-        .progress-container {
-            margin: 20px 0;
-        }
-        
-        .progress-bar {
-            width: 100%;
-            height: 30px;
-            background: #e0e0e0;
-            border-radius: 15px;
+
+        .channel-table-container {
+            border: 1px solid var(--card-border);
+            border-radius: 14px;
             overflow: hidden;
-            position: relative;
+            margin-top: 20px;
+            max-height: 350px;
+            overflow-y: auto;
         }
-        
-        .progress-fill {
-            height: 100%;
-            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
-            width: 0%;
-            transition: width 0.3s ease;
-            display: flex;
-            align-items: center;
-            justify-content: center;
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            text-align: left;
+            font-size: 13px;
+        }
+
+        th {
+            background: rgba(15, 23, 42, 0.8);
+            padding: 12px 16px;
+            color: var(--text-muted);
+            font-weight: 600;
+            border-bottom: 1px solid var(--card-border);
+            position: sticky;
+            top: 0;
+        }
+
+        td {
+            padding: 12px 16px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            color: var(--text-main);
+        }
+
+        tr:hover td {
+            background: rgba(255, 255, 255, 0.02);
+        }
+
+        .badge-type {
+            padding: 4px 8px;
+            border-radius: 6px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .type-channel { background: rgba(56, 189, 248, 0.15); color: #38bdf8; }
+        .type-group { background: rgba(139, 92, 246, 0.15); color: #c084fc; }
+
+        .copy-btn {
+            padding: 4px 8px;
+            background: #334155;
+            border: none;
+            border-radius: 6px;
             color: white;
-            font-weight: bold;
+            cursor: pointer;
             font-size: 12px;
         }
-        
-        .stats {
-            display: grid;
-            grid-template-columns: repeat(4, 1fr);
-            gap: 10px;
-            margin-top: 15px;
+
+        .copy-btn:hover {
+            background: var(--primary);
+            color: #0f172a;
         }
-        
-        .stat-item {
-            text-align: center;
-            padding: 10px;
-            background: white;
-            border-radius: 8px;
+
+        /* Progress Card */
+        .progress-card {
+            background: rgba(15, 23, 42, 0.5);
+            border: 1px solid var(--card-border);
+            border-radius: 16px;
+            padding: 20px;
+            margin-bottom: 20px;
         }
-        
-        .stat-value {
-            font-size: 24px;
-            font-weight: bold;
-            color: #667eea;
-        }
-        
-        .stat-label {
-            font-size: 11px;
-            color: #666;
-            margin-top: 5px;
-        }
-        
-        .hidden {
-            display: none;
-        }
-        
-        .alert {
-            padding: 12px;
-            border-radius: 8px;
-            margin-bottom: 15px;
+
+        .progress-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 10px;
             font-size: 14px;
         }
-        
-        .alert-success {
-            background: #d4edda;
-            color: #155724;
-            border: 1px solid #c3e6cb;
+
+        .progress-bar-bg {
+            height: 12px;
+            background: #1e293b;
+            border-radius: 9999px;
+            overflow: hidden;
+            margin-bottom: 20px;
         }
-        
-        .alert-error {
-            background: #f8d7da;
-            color: #721c24;
-            border: 1px solid #f5c6cb;
+
+        .progress-bar-fill {
+            height: 100%;
+            width: 0%;
+            background: linear-gradient(90deg, var(--primary), var(--accent));
+            transition: width 0.3s ease;
         }
-        
-        .alert-info {
-            background: #d1ecf1;
-            color: #0c5460;
-            border: 1px solid #bee5eb;
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 12px;
         }
-        
-        @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.5; }
+
+        .stat-card {
+            background: #1e293b;
+            padding: 12px;
+            border-radius: 12px;
+            text-align: center;
         }
-        
-        .loading {
-            animation: pulse 1.5s ease-in-out infinite;
+
+        .stat-val {
+            font-size: 20px;
+            font-weight: 700;
+            color: var(--primary);
+        }
+
+        .stat-lbl {
+            font-size: 11px;
+            color: var(--text-muted);
+            margin-top: 2px;
+        }
+
+        /* Toast notification */
+        #toast {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            padding: 14px 20px;
+            border-radius: 12px;
+            background: #1e293b;
+            color: white;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+            border: 1px solid var(--card-border);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 14px;
+            transform: translateY(100px);
+            opacity: 0;
+            transition: all 0.3s ease;
+            z-index: 1000;
+        }
+
+        #toast.show {
+            transform: translateY(0);
+            opacity: 1;
+        }
+
+        /* Responsive */
+        @media (max-width: 640px) {
+            .form-grid { grid-template-columns: 1fr; }
+            .form-group.full-width { grid-column: span 1; }
+            .stats-grid { grid-template-columns: 1fr 1fr; }
+            .tab-btn { padding: 10px 8px; font-size: 12px; }
+            header { flex-direction: column; align-items: flex-start; gap: 15px; }
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>📱 Telegram Media Transfer</h1>
-        <p class="subtitle">Transfer media from one channel to another with progress tracking</p>
-        
-        <div class="channel-info">
-            <div><strong>Source Channel:</strong> {{ source_channel }}</div>
-            <div><strong>Target Channel:</strong> {{ target_channel }}</div>
-        </div>
-        
-        <!-- Login Section -->
-        <div id="loginSection" class="login-section {% if logged_in %}hidden{% endif %}">
-            <div id="codeStep">
-                <div class="alert alert-info">
-                    Click "Send Code" to receive verification code on Telegram
+
+    <div class="app-container">
+        <!-- Header -->
+        <header>
+            <div class="brand">
+                <div class="brand-icon">
+                    <i class="fa-paper-plane"></i>
                 </div>
-                <button onclick="sendCode()" class="btn-primary" id="sendCodeBtn">
-                    📨 Send Verification Code
-                </button>
-            </div>
-            
-            <div id="verifyStep" class="hidden">
-                <div class="input-group">
-                    <label for="code">Verification Code</label>
-                    <input type="text" id="code" placeholder="Enter code from Telegram" maxlength="5">
+                <div class="brand-text">
+                    <h1>Telegram Hub</h1>
+                    <p>Transfer, Channel Inspector & Media Downloader</p>
                 </div>
-                <div class="input-group">
-                    <label for="password">2FA Password (if enabled)</label>
-                    <input type="password" id="password" placeholder="Leave empty if not using 2FA">
-                </div>
-                <button onclick="verifyCode()" class="btn-primary" id="verifyBtn">
-                    ✅ Verify & Login
-                </button>
             </div>
-        </div>
-        
-        <!-- Transfer Section -->
-        <div id="transferSection" class="transfer-section {% if not logged_in %}hidden{% endif %}">
-            <div class="alert alert-success">
-                ✅ Logged in successfully! Ready to transfer media.
+            <div id="statusBadge" class="status-badge {% if logged_in %}logged-in{% endif %}">
+                <span class="status-dot"></span>
+                <span id="statusBadgeText">{% if logged_in %}Connected{% else %}Not Logged In{% endif %}</span>
             </div>
-            
-            <div class="status-box">
-                <div class="status-message" id="statusMessage">Ready to start transfer</div>
-                
-                <div class="progress-container" id="progressContainer" style="display: none;">
-                    <div class="progress-bar">
-                        <div class="progress-fill" id="progressFill">0%</div>
+        </header>
+
+        <!-- Tabs Navigation -->
+        <nav class="tabs">
+            <button class="tab-btn active" onclick="switchTab('loginTab')">
+                <i class="fa-solid fa-key"></i> 1. Credentials & Login
+            </button>
+            <button class="tab-btn" onclick="switchTab('channelsTab')">
+                <i class="fa-solid fa-list-check"></i> 2. Find Channel IDs
+            </button>
+            <button class="tab-btn" onclick="switchTab('transferTab')">
+                <i class="fa-solid fa-arrow-right-arrow-left"></i> 3. Media Transfer
+            </button>
+            <button class="tab-btn" onclick="switchTab('downloaderTab')">
+                <i class="fa-solid fa-download"></i> 4. Content Downloader
+            </button>
+        </nav>
+
+        <!-- TAB 1: LOGIN -->
+        <div id="loginTab" class="tab-content active">
+            <div id="loginFormArea">
+                <div class="form-grid">
+                    <div class="form-group">
+                        <label for="apiId">API ID</label>
+                        <input type="text" id="apiId" placeholder="e.g. 1234567" value="{{ saved_api_id }}">
                     </div>
-                    
-                    <div class="stats">
-                        <div class="stat-item">
-                            <div class="stat-value" id="currentStat">0</div>
-                            <div class="stat-label">Current</div>
-                        </div>
-                        <div class="stat-item">
-                            <div class="stat-value" id="successStat">0</div>
-                            <div class="stat-label">Success</div>
-                        </div>
-                        <div class="stat-item">
-                            <div class="stat-value" id="skippedStat">0</div>
-                            <div class="stat-label">Skipped</div>
-                        </div>
-                        <div class="stat-item">
-                            <div class="stat-value" id="failedStat">0</div>
-                            <div class="stat-label">Failed</div>
-                        </div>
+                    <div class="form-group">
+                        <label for="apiHash">API Hash</label>
+                        <input type="text" id="apiHash" placeholder="e.g. 0938f04741c164281a160dd7..." value="">
+                    </div>
+                    <div class="form-group full-width">
+                        <label for="phone">Phone Number (with Country Code)</label>
+                        <input type="text" id="phone" placeholder="e.g. +94714527083" value="{{ saved_phone }}">
                     </div>
                 </div>
+
+                <div id="codeArea" style="display: none;" class="form-grid">
+                    <div class="form-group">
+                        <label for="code">Verification Code (from Telegram)</label>
+                        <input type="text" id="code" placeholder="Enter 5-digit code">
+                    </div>
+                    <div class="form-group">
+                        <label for="password">2FA Password (if enabled)</label>
+                        <input type="password" id="password" placeholder="Leave empty if none">
+                    </div>
+                </div>
+
+                <div style="display: flex; gap: 10px; margin-top: 10px;">
+                    <button id="sendCodeBtn" onclick="handleSendCode()" class="btn btn-primary">
+                        <i class="fa-solid fa-paper-plane"></i> Send Login Code
+                    </button>
+                    <button id="verifyBtn" onclick="handleVerifyCode()" class="btn btn-success" style="display: none;">
+                        <i class="fa-solid fa-check-double"></i> Verify & Sign In
+                    </button>
+                    <button id="logoutBtn" onclick="handleLogout()" class="btn btn-danger" style="display: {% if logged_in %}inline-flex{% else %}none{% endif %};">
+                        <i class="fa-solid fa-right-from-bracket"></i> Logout
+                    </button>
+                </div>
             </div>
-            
-            <button onclick="startTransfer()" class="btn-success" id="startBtn">
-                🚀 Start Transfer
+
+            <!-- Login Logs -->
+            <div style="margin-top: 30px;">
+                <h3 style="font-size: 14px; color: var(--text-muted); margin-bottom: 10px;">Login Activity History</h3>
+                <div class="console-box" id="loginLogBox">
+                    Loading logs...
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB 2: FIND CHANNELS -->
+        <div id="channelsTab" class="tab-content">
+            <p style="font-size: 14px; color: var(--text-muted); margin-bottom: 20px;">
+                Fetch all channels and groups associated with your Telegram account to inspect their IDs.
+            </p>
+            <button onclick="fetchChannels()" class="btn btn-primary" id="fetchChannelsBtn">
+                <i class="fa-solid fa-arrows-rotate"></i> Fetch My Channels & Groups
             </button>
-            <button onclick="stopTransfer()" class="btn-danger hidden" id="stopBtn">
-                ⏸️ Stop Transfer
+
+            <div class="channel-table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Type</th>
+                            <th>Name</th>
+                            <th>Username</th>
+                            <th>Channel / Group ID</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="channelsTableBody">
+                        <tr>
+                            <td colspan="5" style="text-align: center; color: var(--text-muted);">
+                                Click the button above to load channels.
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- TAB 3: MEDIA TRANSFER -->
+        <div id="transferTab" class="tab-content">
+            <div class="form-grid">
+                <div class="form-group">
+                    <label for="sourceChannel">Source Channel ID / Username</label>
+                    <input type="text" id="sourceChannel" placeholder="e.g. -1003916408757 or @channel">
+                </div>
+                <div class="form-group">
+                    <label for="targetChannel">Target Channel ID / Username</label>
+                    <input type="text" id="targetChannel" placeholder="e.g. -1004460843642 or @target">
+                </div>
+            </div>
+
+            <div class="progress-card">
+                <div class="progress-header">
+                    <span id="transferMessage" style="color: var(--primary);">Status: Ready</span>
+                    <span id="transferProgressPercent">0%</span>
+                </div>
+                <div class="progress-bar-bg">
+                    <div class="progress-bar-fill" id="progressBarFill"></div>
+                </div>
+
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-val" id="statCurrent">0</div>
+                        <div class="stat-lbl">Processed</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-val" id="statSuccess" style="color: var(--success);">0</div>
+                        <div class="stat-lbl">Success</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-val" id="statSkipped" style="color: var(--warning);">0</div>
+                        <div class="stat-lbl">Skipped</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-val" id="statFailed" style="color: var(--danger);">0</div>
+                        <div class="stat-lbl">Failed</div>
+                    </div>
+                </div>
+            </div>
+
+            <div style="display: flex; gap: 10px;">
+                <button id="startTransferBtn" onclick="startTransfer()" class="btn btn-success">
+                    <i class="fa-solid fa-play"></i> Start Transfer
+                </button>
+                <button id="stopTransferBtn" onclick="stopTransfer()" class="btn btn-danger" style="display: none;">
+                    <i class="fa-solid fa-stop"></i> Stop Transfer
+                </button>
+            </div>
+        </div>
+
+        <!-- TAB 4: CONTENT DOWNLOADER & FORWARDER -->
+        <div id="downloaderTab" class="tab-content">
+            <p style="font-size: 14px; color: var(--text-muted); margin-bottom: 20px;">
+                Download media directly to your device OR forward/send it to another channel using a post link.
+            </p>
+
+            <div class="form-group">
+                <label for="contentUrl">Telegram Message Link</label>
+                <input type="text" id="contentUrl" placeholder="https://t.me/channel_name/12345">
+            </div>
+
+            <div class="form-group">
+                <label>Action Mode</label>
+                <div style="display: flex; gap: 20px; margin-top: 5px;">
+                    <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; color: var(--text-main);">
+                        <input type="radio" name="downloaderAction" value="download" checked onchange="toggleDownloaderAction()" style="width: auto;">
+                        <span>📥 Download to My Device</span>
+                    </label>
+                    <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; color: var(--text-main);">
+                        <input type="radio" name="downloaderAction" value="send_channel" onchange="toggleDownloaderAction()" style="width: auto;">
+                        <span>🚀 Send / Forward to Channel</span>
+                    </label>
+                </div>
+            </div>
+
+            <div id="targetChannelGroup" class="form-grid" style="display: none;">
+                <div class="form-group">
+                    <label for="downloaderTargetChannel">Target Channel ID / Username</label>
+                    <input type="text" id="downloaderTargetChannel" placeholder="e.g. -1004460843642 or @target">
+                </div>
+                <div class="form-group">
+                    <label for="downloaderSendMode">Send Mode</label>
+                    <select id="downloaderSendMode" style="width: 100%; padding: 12px 16px; background: var(--input-bg); border: 1px solid var(--input-border); border-radius: 12px; color: white; font-size: 14px; outline: none;">
+                        <option value="clean">Clean Upload (Original Caption, No Forward Tag)</option>
+                        <option value="forward">Forward Message (With Forwarded From Header)</option>
+                    </select>
+                </div>
+            </div>
+
+            <button id="downloadBtn" onclick="downloadContent()" class="btn btn-primary" style="margin-top: 10px;">
+                <i class="fa-solid fa-download"></i> Fetch & Download File
             </button>
         </div>
+
     </div>
-    
+
+    <!-- Toast Notification Container -->
+    <div id="toast">
+        <i id="toastIcon" class="fa-solid fa-circle-info"></i>
+        <span id="toastMessage">Notification message</span>
+    </div>
+
     <script>
         const socket = io();
-        let isTransferring = false;
-        
-        // Socket connection
+
         socket.on('connect', () => {
-            console.log('Connected to server');
+            console.log('Socket connected');
         });
-        
-        // Status updates
+
         socket.on('status_update', (data) => {
-            updateStatus(data);
+            updateTransferUI(data);
         });
-        
-        async function sendCode() {
-            const btn = document.getElementById('sendCodeBtn');
-            btn.disabled = true;
-            btn.textContent = '⏳ Sending...';
+
+        // Tab Switching Logic
+        function switchTab(tabId) {
+            document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+            document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
             
-            try {
-                const response = await fetch('/api/login', { method: 'POST' });
-                const data = await response.json();
-                
-                if (data.status === 'code_sent') {
-                    document.getElementById('codeStep').classList.add('hidden');
-                    document.getElementById('verifyStep').classList.remove('hidden');
-                    showAlert('success', data.message);
-                } else if (data.status === 'logged_in') {
-                    showLoggedIn();
-                }
-            } catch (error) {
-                showAlert('error', 'Error: ' + error.message);
-                btn.disabled = false;
-                btn.textContent = '📨 Send Verification Code';
+            document.getElementById(tabId).classList.add('active');
+            event.currentTarget.classList.add('active');
+
+            if (tabId === 'loginTab') {
+                loadLoginLogs();
             }
         }
-        
-        async function verifyCode() {
-            const code = document.getElementById('code').value;
-            const password = document.getElementById('password').value;
+
+        // Toast Helper
+        function showToast(msg, type = 'info') {
+            const toast = document.getElementById('toast');
+            const toastMessage = document.getElementById('toastMessage');
+            const toastIcon = document.getElementById('toastIcon');
+
+            toastMessage.textContent = msg;
             
-            if (!code) {
-                showAlert('error', 'Please enter verification code');
+            if (type === 'success') {
+                toastIcon.className = 'fa-solid fa-circle-check';
+                toastIcon.style.color = '#10b981';
+            } else if (type === 'error') {
+                toastIcon.className = 'fa-solid fa-circle-exclamation';
+                toastIcon.style.color = '#ef4444';
+            } else {
+                toastIcon.className = 'fa-solid fa-circle-info';
+                toastIcon.style.color = '#38bdf8';
+            }
+
+            toast.classList.add('show');
+            setTimeout(() => {
+                toast.classList.remove('show');
+            }, 4000);
+        }
+
+        // Update Login State Header UI
+        function setLoggedInState(isLoggedIn) {
+            const badge = document.getElementById('statusBadge');
+            const text = document.getElementById('statusBadgeText');
+            const logoutBtn = document.getElementById('logoutBtn');
+
+            if (isLoggedIn) {
+                badge.classList.add('logged-in');
+                text.textContent = 'Connected';
+                logoutBtn.style.display = 'inline-flex';
+            } else {
+                badge.classList.remove('logged-in');
+                text.textContent = 'Not Logged In';
+                logoutBtn.style.display = 'none';
+            }
+        }
+
+        // API Handler: Send Login Code
+        async function handleSendCode() {
+            const api_id = document.getElementById('apiId').value.trim();
+            const api_hash = document.getElementById('apiHash').value.trim();
+            const phone = document.getElementById('phone').value.trim();
+
+            if (!api_id || !api_hash || !phone) {
+                showToast('Please fill API ID, API Hash, and Phone Number', 'error');
                 return;
             }
-            
+
+            const btn = document.getElementById('sendCodeBtn');
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Sending Code...';
+
+            try {
+                const res = await fetch('/api/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ api_id, api_hash, phone })
+                });
+                const data = await res.json();
+
+                if (res.ok) {
+                    if (data.status === 'code_sent') {
+                        showToast(data.message, 'success');
+                        document.getElementById('codeArea').style.display = 'grid';
+                        document.getElementById('verifyBtn').style.display = 'inline-flex';
+                        btn.style.display = 'none';
+                    } else if (data.status === 'logged_in') {
+                        showToast(data.message, 'success');
+                        setLoggedInState(true);
+                    }
+                } else {
+                    showToast(data.message || 'Error requesting code', 'error');
+                }
+            } catch (err) {
+                showToast('Network error: ' + err.message, 'error');
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = '<i class="fa-solid fa-paper-plane"></i> Send Login Code';
+                loadLoginLogs();
+            }
+        }
+
+        // API Handler: Verify Code
+        async function handleVerifyCode() {
+            const code = document.getElementById('code').value.trim();
+            const password = document.getElementById('password').value.trim();
+
+            if (!code) {
+                showToast('Please enter the verification code', 'error');
+                return;
+            }
+
             const btn = document.getElementById('verifyBtn');
             btn.disabled = true;
-            btn.textContent = '⏳ Verifying...';
-            
+            btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Verifying...';
+
             try {
-                const response = await fetch('/api/verify', {
+                const res = await fetch('/api/verify', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ code, password })
                 });
-                
-                const data = await response.json();
-                
-                if (data.status === 'success') {
-                    showLoggedIn();
+                const data = await res.json();
+
+                if (res.ok && data.status === 'success') {
+                    showToast(data.message, 'success');
+                    setLoggedInState(true);
+                    document.getElementById('codeArea').style.display = 'none';
+                    btn.style.display = 'none';
+                    document.getElementById('sendCodeBtn').style.display = 'inline-flex';
                 } else if (data.status === 'password_required') {
-                    showAlert('error', '2FA password required');
-                    btn.disabled = false;
-                    btn.textContent = '✅ Verify & Login';
+                    showToast('2FA Password required!', 'error');
                 } else {
-                    showAlert('error', data.message);
-                    btn.disabled = false;
-                    btn.textContent = '✅ Verify & Login';
+                    showToast(data.message || 'Verification failed', 'error');
                 }
-            } catch (error) {
-                showAlert('error', 'Error: ' + error.message);
+            } catch (err) {
+                showToast('Network error: ' + err.message, 'error');
+            } finally {
                 btn.disabled = false;
-                btn.textContent = '✅ Verify & Login';
+                btn.innerHTML = '<i class="fa-solid fa-check-double"></i> Verify & Sign In';
+                loadLoginLogs();
             }
         }
-        
-        function showLoggedIn() {
-            document.getElementById('loginSection').classList.add('hidden');
-            document.getElementById('transferSection').classList.remove('hidden');
-        }
-        
-        async function startTransfer() {
+
+        // API Handler: Logout
+        async function handleLogout() {
             try {
-                const response = await fetch('/api/start', { method: 'POST' });
-                const data = await response.json();
-                
-                if (data.status === 'success') {
-                    isTransferring = true;
-                    document.getElementById('startBtn').classList.add('hidden');
-                    document.getElementById('stopBtn').classList.remove('hidden');
-                    document.getElementById('progressContainer').style.display = 'block';
-                } else {
-                    showAlert('error', data.message);
+                const res = await fetch('/api/logout', { method: 'POST' });
+                const data = await res.json();
+                if (res.ok) {
+                    showToast('Logged out successfully', 'info');
+                    setLoggedInState(false);
                 }
-            } catch (error) {
-                showAlert('error', 'Error: ' + error.message);
+            } catch (err) {
+                showToast('Logout failed: ' + err.message, 'error');
+            } finally {
+                loadLoginLogs();
             }
         }
-        
+
+        // Load Login Activity Logs
+        async function loadLoginLogs() {
+            try {
+                const res = await fetch('/api/login_log');
+                const logs = await res.json();
+                const logBox = document.getElementById('loginLogBox');
+                if (logs.length === 0) {
+                    logBox.innerHTML = 'No activity recorded yet.';
+                    return;
+                }
+                logBox.innerHTML = logs.reverse().map(l => 
+                    `<div>[${new Date(l.timestamp).toLocaleString()}] Phone: ${l.phone} | Event: <strong>${l.status}</strong> ${l.note ? '('+l.note+')' : ''}</div>`
+                ).join('');
+            } catch (err) {
+                document.getElementById('loginLogBox').innerHTML = 'Failed to load logs.';
+            }
+        }
+
+        // Fetch Channels
+        async function fetchChannels() {
+            const btn = document.getElementById('fetchChannelsBtn');
+            const tbody = document.getElementById('channelsTableBody');
+
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Fetching...';
+
+            try {
+                const res = await fetch('/api/get_channels', { method: 'POST' });
+                const data = await res.json();
+
+                if (res.ok && data.channels) {
+                    if (data.channels.length === 0) {
+                        tbody.innerHTML = '<tr><td colspan="5" style="text-align: center;">No channels found.</td></tr>';
+                        return;
+                    }
+                    tbody.innerHTML = data.channels.map(c => `
+                        <tr>
+                            <td><span class="badge-type type-${c.type}">${c.type}</span></td>
+                            <td><strong>${c.name}</strong></td>
+                            <td>${c.username ? c.username : '<span style="color: var(--text-muted)">Private</span>'}</td>
+                            <td><code>${c.id}</code></td>
+                            <td>
+                                <button class="copy-btn" onclick="copyId('${c.id}')">
+                                    <i class="fa-regular fa-copy"></i> Copy ID
+                                </button>
+                            </td>
+                        </tr>
+                    `).join('');
+                    showToast(`Fetched ${data.channels.length} channels/groups`, 'success');
+                } else {
+                    showToast(data.message || 'Failed to get channels', 'error');
+                }
+            } catch (err) {
+                showToast('Error: ' + err.message, 'error');
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = '<i class="fa-solid fa-arrows-rotate"></i> Fetch My Channels & Groups';
+            }
+        }
+
+        function copyId(id) {
+            navigator.clipboard.writeText(id);
+            showToast(`Copied ID: ${id}`, 'info');
+        }
+
+        // Start Transfer
+        async function startTransfer() {
+            const source_channel = document.getElementById('sourceChannel').value.trim();
+            const target_channel = document.getElementById('targetChannel').value.trim();
+
+            if (!source_channel || !target_channel) {
+                showToast('Source and Target Channel IDs are required', 'error');
+                return;
+            }
+
+            try {
+                const res = await fetch('/api/start', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ source_channel, target_channel })
+                });
+                const data = await res.json();
+
+                if (res.ok && data.status === 'success') {
+                    showToast('Transfer started!', 'success');
+                    document.getElementById('startTransferBtn').style.display = 'none';
+                    document.getElementById('stopTransferBtn').style.display = 'inline-flex';
+                } else {
+                    showToast(data.message || 'Could not start transfer', 'error');
+                }
+            } catch (err) {
+                showToast('Error: ' + err.message, 'error');
+            }
+        }
+
+        // Stop Transfer
         async function stopTransfer() {
             try {
-                await fetch('/api/stop', { method: 'POST' });
-                isTransferring = false;
-                document.getElementById('startBtn').classList.remove('hidden');
-                document.getElementById('stopBtn').classList.add('hidden');
-            } catch (error) {
-                showAlert('error', 'Error: ' + error.message);
+                const res = await fetch('/api/stop', { method: 'POST' });
+                const data = await res.json();
+                showToast(data.message, 'info');
+            } catch (err) {
+                showToast('Error: ' + err.message, 'error');
             }
         }
-        
-        function updateStatus(data) {
-            document.getElementById('statusMessage').textContent = data.message;
-            
+
+        // Update Transfer UI Socket
+        function updateTransferUI(data) {
+            document.getElementById('transferMessage').textContent = data.message;
+            document.getElementById('statCurrent').textContent = data.current;
+            document.getElementById('statSuccess').textContent = data.success;
+            document.getElementById('statSkipped').textContent = data.skipped;
+            document.getElementById('statFailed').textContent = data.failed;
+
+            let pct = 0;
             if (data.total > 0) {
-                const percentage = Math.round((data.current / data.total) * 100);
-                document.getElementById('progressFill').style.width = percentage + '%';
-                document.getElementById('progressFill').textContent = percentage + '%';
+                pct = Math.round((data.current / data.total) * 100);
             }
-            
-            document.getElementById('currentStat').textContent = data.current;
-            document.getElementById('successStat').textContent = data.success;
-            document.getElementById('skippedStat').textContent = data.skipped;
-            document.getElementById('failedStat').textContent = data.failed;
-            
-            if (!data.is_running && isTransferring) {
-                isTransferring = false;
-                document.getElementById('startBtn').classList.remove('hidden');
-                document.getElementById('stopBtn').classList.add('hidden');
+            document.getElementById('transferProgressPercent').textContent = pct + '%';
+            document.getElementById('progressBarFill').style.width = pct + '%';
+
+            if (!data.is_running) {
+                document.getElementById('startTransferBtn').style.display = 'inline-flex';
+                document.getElementById('stopTransferBtn').style.display = 'none';
             }
         }
-        
-        function showAlert(type, message) {
-            // Simple alert for now
-            alert(message);
+
+        function toggleDownloaderAction() {
+            const action = document.querySelector('input[name="downloaderAction"]:checked').value;
+            const targetGroup = document.getElementById('targetChannelGroup');
+            const btn = document.getElementById('downloadBtn');
+
+            if (action === 'send_channel') {
+                targetGroup.style.display = 'grid';
+                btn.className = 'btn btn-success';
+                btn.innerHTML = '<i class="fa-solid fa-paper-plane"></i> Send to Target Channel';
+            } else {
+                targetGroup.style.display = 'none';
+                btn.className = 'btn btn-primary';
+                btn.innerHTML = '<i class="fa-solid fa-download"></i> Fetch & Download File';
+            }
         }
+
+        // Download or Send Content Link
+        async function downloadContent() {
+            const url = document.getElementById('contentUrl').value.trim();
+            const action = document.querySelector('input[name="downloaderAction"]:checked').value;
+            const target_channel = document.getElementById('downloaderTargetChannel').value.trim();
+            const send_mode = document.getElementById('downloaderSendMode').value;
+
+            if (!url) {
+                showToast('Please enter a Telegram message link', 'error');
+                return;
+            }
+
+            if (action === 'send_channel' && !target_channel) {
+                showToast('Please enter a Target Channel ID / Username', 'error');
+                return;
+            }
+
+            const btn = document.getElementById('downloadBtn');
+            btn.disabled = true;
+            btn.innerHTML = action === 'send_channel' 
+                ? '<i class="fa-solid fa-spinner fa-spin"></i> Processing & Sending...' 
+                : '<i class="fa-solid fa-spinner fa-spin"></i> Downloading...';
+
+            try {
+                if (action === 'send_channel') {
+                    const res = await fetch('/api/download_link', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ url, action, target_channel, send_mode })
+                    });
+                    const data = await res.json();
+                    if (res.ok && data.status === 'success') {
+                        showToast(data.message, 'success');
+                    } else {
+                        showToast(data.message || 'Operation failed', 'error');
+                    }
+                } else {
+                    const res = await fetch('/api/download_link', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ url, action: 'download' })
+                    });
+
+                    if (res.ok) {
+                        const blob = await res.blob();
+                        const disposition = res.headers.get('Content-Disposition');
+                        let filename = 'downloaded_media';
+                        if (disposition && disposition.indexOf('filename=') !== -1) {
+                            const matches = /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/.exec(disposition);
+                            if (matches != null && matches[1]) filename = matches[1].replace(/['"]/g, '');
+                        }
+                        
+                        const downloadUrl = window.URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = downloadUrl;
+                        a.download = filename;
+                        document.body.appendChild(a);
+                        a.click();
+                        a.remove();
+                        showToast('File downloaded to device successfully!', 'success');
+                    } else {
+                        const data = await res.json();
+                        showToast(data.message || 'Download failed', 'error');
+                    }
+                }
+            } catch (err) {
+                showToast('Error: ' + err.message, 'error');
+            } finally {
+                btn.disabled = false;
+                toggleDownloaderAction();
+            }
+        }
+
+        // Init
+        loadLoginLogs();
     </script>
 </body>
 </html>

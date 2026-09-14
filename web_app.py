@@ -654,30 +654,53 @@ def download_link():
                     raise ValueError('No media found in that message')
 
                 def download_progress(c, t):
-                    emit_link_progress('Downloading', c, t)
+                    emit_link_progress('Downloading from Telegram', c, t)
 
                 file_path = await client.download_media(message, DOWNLOAD_DIR, progress_callback=download_progress)
                 return file_path
 
             file_path = run_async(_download())
 
-            if not file_path:
-                return jsonify({'status': 'error', 'message': 'Could not download media'}), 400
+            if not file_path or not os.path.exists(file_path):
+                return jsonify({'status': 'error', 'message': 'Could not download media from Telegram'}), 400
 
-            mime = mimetypes.guess_type(file_path)[0] or 'application/octet-stream'
-            basename = os.path.basename(file_path)
+            filename = os.path.basename(file_path)
+            emit_link_progress('Ready! Transferring to PC', 100, 100)
 
-            def _cleanup():
-                import time; time.sleep(5)
-                try: os.remove(file_path)
-                except: pass
-
-            threading.Thread(target=_cleanup, daemon=True).start()
-
-            return send_file(file_path, mimetype=mime, as_attachment=True, download_name=basename)
+            return jsonify({
+                'status': 'success',
+                'mode': 'download',
+                'filename': filename,
+                'download_url': f'/api/get_file/{filename}',
+                'message': 'Media ready! Starting download to your PC...'
+            })
 
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 400
+
+
+@app.route('/api/get_file/<filename>')
+def get_file(filename):
+    """Serve file to user's PC browser and auto-delete from VPS afterwards."""
+    safe_filename = os.path.basename(filename)
+    file_path = os.path.join(DOWNLOAD_DIR, safe_filename)
+
+    if not os.path.exists(file_path):
+        return "File not found or already downloaded.", 404
+
+    mime = mimetypes.guess_type(file_path)[0] or 'application/octet-stream'
+
+    # Auto-delete temp file from VPS 60 seconds after streaming to user's PC starts
+    def _delayed_cleanup():
+        import time; time.sleep(60)
+        try:
+            if os.path.exists(file_path):
+                os.remove(file_path)
+        except Exception:
+            pass
+
+    threading.Thread(target=_delayed_cleanup, daemon=True).start()
+    return send_file(file_path, mimetype=mime, as_attachment=True, download_name=safe_filename)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

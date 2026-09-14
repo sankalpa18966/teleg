@@ -1053,26 +1053,19 @@
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ url, action: 'download' })
                     });
+                    const data = await res.json();
 
-                    if (res.ok) {
-                        const blob = await res.blob();
-                        const disposition = res.headers.get('Content-Disposition');
-                        let filename = 'downloaded_media';
-                        if (disposition && disposition.indexOf('filename=') !== -1) {
-                            const matches = /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/.exec(disposition);
-                            if (matches != null && matches[1]) filename = matches[1].replace(/['"]/g, '');
-                        }
+                    if (res.ok && data.status === 'success') {
+                        showToast('Starting download to your PC...', 'success');
                         
-                        const downloadUrl = window.URL.createObjectURL(blob);
+                        // Trigger native browser file download directly onto PC
                         const a = document.createElement('a');
-                        a.href = downloadUrl;
-                        a.download = filename;
+                        a.href = data.download_url;
+                        a.download = data.filename;
                         document.body.appendChild(a);
                         a.click();
                         a.remove();
-                        showToast('File downloaded to device successfully!', 'success');
                     } else {
-                        const data = await res.json();
                         showToast(data.message || 'Download failed', 'error');
                     }
                 }

@@ -656,6 +656,21 @@
             <button id="downloadBtn" onclick="downloadContent()" class="btn btn-primary" style="margin-top: 10px;">
                 <i class="fa-solid fa-download"></i> Fetch & Download File
             </button>
+
+            <!-- Link Download / Forward Real-time Progress Card -->
+            <div id="linkProgressCard" class="progress-card" style="display: none; margin-top: 20px;">
+                <div class="progress-header">
+                    <span id="linkProgressMessage" style="color: var(--primary);">Processing...</span>
+                    <span id="linkProgressPercent">0%</span>
+                </div>
+                <div class="progress-bar-bg">
+                    <div class="progress-bar-fill" id="linkProgressBarFill" style="width: 0%;"></div>
+                </div>
+                <div style="display: flex; justify-content: space-between; font-size: 12px; color: var(--text-muted);">
+                    <span id="linkProgressSize">0 MB / 0 MB</span>
+                    <span id="linkProgressAction">In Progress</span>
+                </div>
+            </div>
         </div>
 
     </div>
@@ -675,6 +690,16 @@
 
         socket.on('status_update', (data) => {
             updateTransferUI(data);
+        });
+
+        socket.on('link_download_progress', (data) => {
+            const card = document.getElementById('linkProgressCard');
+            card.style.display = 'block';
+            document.getElementById('linkProgressMessage').textContent = data.message;
+            document.getElementById('linkProgressPercent').textContent = data.percent + '%';
+            document.getElementById('linkProgressBarFill').style.width = data.percent + '%';
+            document.getElementById('linkProgressSize').textContent = `${data.mb_current} MB / ${data.mb_total} MB`;
+            document.getElementById('linkProgressAction').textContent = data.action;
         });
 
         // Tab Switching Logic
@@ -1001,6 +1026,14 @@
                 ? '<i class="fa-solid fa-spinner fa-spin"></i> Processing & Sending...' 
                 : '<i class="fa-solid fa-spinner fa-spin"></i> Downloading...';
 
+            const card = document.getElementById('linkProgressCard');
+            card.style.display = 'block';
+            document.getElementById('linkProgressMessage').textContent = 'Starting process...';
+            document.getElementById('linkProgressPercent').textContent = '0%';
+            document.getElementById('linkProgressBarFill').style.width = '0%';
+            document.getElementById('linkProgressSize').textContent = '0 MB / 0 MB';
+            document.getElementById('linkProgressAction').textContent = 'Initializing';
+
             try {
                 if (action === 'send_channel') {
                     const res = await fetch('/api/download_link', {
@@ -1048,6 +1081,9 @@
             } finally {
                 btn.disabled = false;
                 toggleDownloaderAction();
+                setTimeout(() => {
+                    card.style.display = 'none';
+                }, 4000);
             }
         }
 

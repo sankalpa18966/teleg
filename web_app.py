@@ -554,6 +554,21 @@ async def fetch_message_by_url(client, parsed):
     return message
 
 
+def emit_link_progress(action_name, current, total):
+    pct = (current / total) * 100 if total > 0 else 0
+    mb_curr = round(current / (1024 * 1024), 2)
+    mb_tot = round(total / (1024 * 1024), 2)
+    socketio.emit('link_download_progress', {
+        'action': action_name,
+        'current': current,
+        'total': total,
+        'percent': round(pct, 1),
+        'mb_current': mb_curr,
+        'mb_total': mb_tot,
+        'message': f"{action_name}: {mb_curr} MB / {mb_tot} MB ({round(pct, 1)}%)"
+    })
+
+
 @app.route('/api/download_link', methods=['POST'])
 def download_link():
     """Download media from a Telegram message URL to device OR send to target channel."""
@@ -592,12 +607,17 @@ def download_link():
                 message = await fetch_message_by_url(client, parsed)
 
                 if send_mode == 'forward':
+                    emit_link_progress('Forwarding', 1, 1)
                     await client.forward_messages(tgt, message)
                     return 'Message forwarded successfully!'
                 else:
                     if not message.media:
                         raise ValueError('No media found in that message')
-                    file_path = await client.download_media(message, DOWNLOAD_DIR)
+                    
+                    def download_progress(c, t):
+                        emit_link_progress('Downloading', c, t)
+
+                    file_path = await client.download_media(message, DOWNLOAD_DIR, progress_callback=download_progress)
                     if not file_path:
                         raise ValueError('Failed to download media')
 
@@ -606,11 +626,15 @@ def download_link():
                         is_video = file_path.lower().endswith(
                             ('.mp4', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.webm', '.m4v')
                         )
+                        def upload_progress(c, t):
+                            emit_link_progress('Uploading', c, t)
+
                         await client.send_file(
                             tgt, file_path,
                             caption=caption,
                             supports_streaming=is_video,
-                            force_document=False
+                            force_document=False,
+                            progress_callback=upload_progress
                         )
                     finally:
                         try:
@@ -628,7 +652,11 @@ def download_link():
                 message = await fetch_message_by_url(client, parsed)
                 if not message.media:
                     raise ValueError('No media found in that message')
-                file_path = await client.download_media(message, DOWNLOAD_DIR)
+
+                def download_progress(c, t):
+                    emit_link_progress('Downloading', c, t)
+
+                file_path = await client.download_media(message, DOWNLOAD_DIR, progress_callback=download_progress)
                 return file_path
 
             file_path = run_async(_download())

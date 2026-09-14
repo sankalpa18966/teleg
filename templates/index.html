@@ -670,6 +670,14 @@
                     <span id="linkProgressSize">0 MB / 0 MB</span>
                     <span id="linkProgressAction">In Progress</span>
                 </div>
+
+                <!-- Direct PC Download Button Area -->
+                <div id="pcDownloadButtonArea" style="display: none; text-align: center; margin-top: 15px; padding-top: 15px; border-top: 1px dashed var(--card-border);">
+                    <a id="pcDownloadLink" href="#" class="btn btn-success" style="width: 100%; text-decoration: none; font-size: 15px; padding: 14px 20px; display: inline-flex; align-items: center; justify-content: center; gap: 10px;">
+                        <i class="fa-solid fa-circle-down" style="font-size: 20px;"></i>
+                        <span>Click Here to Save File to Your PC (<span id="pcDownloadFilename">file.mp4</span>)</span>
+                    </a>
+                </div>
             </div>
         </div>
 
@@ -1027,7 +1035,9 @@
                 : '<i class="fa-solid fa-spinner fa-spin"></i> Downloading...';
 
             const card = document.getElementById('linkProgressCard');
+            const pcBtnArea = document.getElementById('pcDownloadButtonArea');
             card.style.display = 'block';
+            pcBtnArea.style.display = 'none';
             document.getElementById('linkProgressMessage').textContent = 'Starting process...';
             document.getElementById('linkProgressPercent').textContent = '0%';
             document.getElementById('linkProgressBarFill').style.width = '0%';
@@ -1056,9 +1066,16 @@
                     const data = await res.json();
 
                     if (res.ok && data.status === 'success') {
-                        showToast('Starting download to your PC...', 'success');
+                        showToast('File ready! Click the green button to save to PC.', 'success');
                         
-                        // Trigger native browser file download directly onto PC
+                        // Setup the direct PC Download Button
+                        const pcLink = document.getElementById('pcDownloadLink');
+                        pcLink.href = data.download_url;
+                        pcLink.setAttribute('download', data.filename);
+                        document.getElementById('pcDownloadFilename').textContent = data.filename;
+                        pcBtnArea.style.display = 'block';
+
+                        // Attempt automatic click as well
                         const a = document.createElement('a');
                         a.href = data.download_url;
                         a.download = data.filename;
@@ -1074,9 +1091,6 @@
             } finally {
                 btn.disabled = false;
                 toggleDownloaderAction();
-                setTimeout(() => {
-                    card.style.display = 'none';
-                }, 4000);
             }
         }
 

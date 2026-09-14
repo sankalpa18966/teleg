@@ -690,9 +690,9 @@ def get_file(filename):
 
     mime = mimetypes.guess_type(file_path)[0] or 'application/octet-stream'
 
-    # Auto-delete temp file from VPS 60 seconds after streaming to user's PC starts
+    # Auto-delete temp file from VPS 300 seconds (5 mins) after streaming to user's PC starts
     def _delayed_cleanup():
-        import time; time.sleep(60)
+        import time; time.sleep(300)
         try:
             if os.path.exists(file_path):
                 os.remove(file_path)

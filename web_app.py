@@ -808,6 +808,10 @@ async def batch_download_and_upload(base_link, start_id, end_id, target_channel,
         
         total_messages = end_id - start_id + 1
         batch_status['total_items'] = total_messages
+        batch_status['downloaded_count'] = 0
+        batch_status['total_size_mb'] = 0
+        total_downloaded_bytes = 0
+        
         emit_batch_status(f'📥 Starting progressive download (max {max_batch_gb}GB per batch)...', 'downloading', 0, total_messages)
         
         max_batch_bytes = max_batch_gb * 1024 * 1024 * 1024
@@ -832,6 +836,7 @@ async def batch_download_and_upload(base_link, start_id, end_id, target_channel,
                 # Upload any remaining files before stopping
                 if current_batch_files:
                     batch_number += 1
+                    batch_status['current_batch'] = batch_number
                     await upload_single_batch(current_batch_files, target, batch_number, '?')
                     if delete_after:
                         cleanup_files(current_batch_files)
@@ -852,6 +857,8 @@ async def batch_download_and_upload(base_link, start_id, end_id, target_channel,
                     
                     if file_path and os.path.exists(file_path):
                         file_size = os.path.getsize(file_path)
+                        total_downloaded_bytes += file_size
+                        batch_status['total_size_mb'] = format_size_mb(total_downloaded_bytes)
                         
                         # Check if adding this file exceeds batch limit
                         if current_batch_size + file_size > max_batch_bytes and current_batch_files:
@@ -891,6 +898,7 @@ async def batch_download_and_upload(base_link, start_id, end_id, target_channel,
                         })
                         current_batch_size += file_size
                         batch_status['downloaded_count'] += 1
+                        batch_status['total_size_mb'] = format_size_mb(total_downloaded_bytes)
                         
                         emit_batch_status(
                             f'✅ Downloaded {os.path.basename(file_path)} ({format_size_mb(file_size)} MB)',
@@ -910,6 +918,7 @@ async def batch_download_and_upload(base_link, start_id, end_id, target_channel,
         if current_batch_files and batch_status['is_running']:
             batch_number += 1
             batch_status['current_batch'] = batch_number
+            batch_status['batch_count'] = batch_number
             
             emit_batch_status(
                 f'📤 Uploading final batch {batch_number} ({len(current_batch_files)} files, {format_size_mb(current_batch_size)} MB)...',
@@ -939,48 +948,111 @@ async def batch_download_and_upload(base_link, start_id, end_id, target_channel,
 
 
 async def upload_single_batch(batch_files, target_channel, batch_number, total_batches_str):
-    """Upload a single batch as media group"""
+    """Upload a single batch of files (chunked into groups of max 10 files for Telegram media group limits)"""
+    global client
     try:
+        if not batch_files:
+            return True
+            
         batch_size = sum(f['size'] for f in batch_files)
+        total_files = len(batch_files)
         
-        media_files = []
-        for idx, file_info in enumerate(batch_files, 1):
-            file_path = file_info['path']
-            caption = file_info.get('caption', '')
+        # Resolve target channel entity
+        def _resolve(ch):
+            if isinstance(ch, str) and ch.lstrip('-').isdigit():
+                return int(ch)
+            return ch
             
-            # Add batch info to first file
-            if idx == 1:
-                batch_caption = f"📦 Batch {batch_number}/{total_batches_str} | {len(batch_files)} files | {format_size_mb(batch_size)} MB\n"
-                if caption:
-                    caption = batch_caption + "\n" + caption
-                else:
-                    caption = batch_caption
+        target_resolved = _resolve(target_channel)
+        try:
+            target_entity = await client.get_entity(target_resolved)
+        except Exception:
+            target_entity = target_resolved
+        
+        # Telegram media groups (albums) allow max 10 files per album
+        chunk_size = 10
+        chunks = [batch_files[i:i + chunk_size] for i in range(0, total_files, chunk_size)]
+        total_chunks = len(chunks)
+        
+        for chunk_idx, chunk in enumerate(chunks, 1):
+            files_to_send = []
+            captions_to_send = []
             
-            media_files.append((file_path, caption if idx == 1 else ''))
-        
-        # Upload
-        if len(media_files) > 1:
-            files_to_send = [f[0] for f in media_files]
-            await client.send_file(
-                target_channel,
-                files_to_send,
-                caption=media_files[0][1],
-                supports_streaming=True
+            for file_idx, file_info in enumerate(chunk):
+                file_path = file_info['path']
+                caption = file_info.get('caption', '') or ''
+                
+                # Add header info to the first file of the first chunk in the batch
+                if chunk_idx == 1 and file_idx == 0:
+                    batch_caption = f"📦 Batch {batch_number}/{total_batches_str} | {total_files} files | {format_size_mb(batch_size)} MB"
+                    caption = f"{batch_caption}\n\n{caption}".strip() if caption else batch_caption
+                
+                files_to_send.append(file_path)
+                captions_to_send.append(caption)
+            
+            emit_batch_status(
+                f'📤 Uploading batch {batch_number} (group {chunk_idx}/{total_chunks}, {len(chunk)} files)...',
+                'uploading'
             )
-        else:
-            await client.send_file(
-                target_channel,
-                media_files[0][0],
-                caption=media_files[0][1],
-                supports_streaming=True
-            )
-        
+            
+            uploaded_chunk = False
+            retry_count = 0
+            while not uploaded_chunk and retry_count < 3:
+                try:
+                    if len(files_to_send) > 1:
+                        # Send album of max 10 files
+                        await client.send_file(
+                            target_entity,
+                            files_to_send,
+                            caption=captions_to_send[0] if captions_to_send[0] else None,
+                            supports_streaming=True
+                        )
+                    else:
+                        is_vid = files_to_send[0].lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.webm', '.m4v'))
+                        await client.send_file(
+                            target_entity,
+                            files_to_send[0],
+                            caption=captions_to_send[0] if captions_to_send[0] else None,
+                            supports_streaming=is_vid
+                        )
+                    uploaded_chunk = True
+                except FloodWaitError as e:
+                    emit_batch_status(f'⚠️ FloodWait {e.seconds}s during upload...', 'uploading')
+                    await asyncio.sleep(e.seconds + 1)
+                    retry_count += 1
+                except Exception as chunk_err:
+                    # Fallback: If album upload fails (e.g. incompatible media types or Telethon group limit error), send files 1-by-1
+                    emit_batch_status(f'⚠️ Album upload failed ({str(chunk_err)}), uploading files individually...', 'uploading')
+                    for f_path, f_cap in zip(files_to_send, captions_to_send):
+                        sent_single = False
+                        f_retries = 0
+                        while not sent_single and f_retries < 3:
+                            try:
+                                is_vid = f_path.lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.webm', '.m4v'))
+                                await client.send_file(
+                                    target_entity,
+                                    f_path,
+                                    caption=f_cap if f_cap else None,
+                                    supports_streaming=is_vid
+                                )
+                                sent_single = True
+                                await asyncio.sleep(1)
+                            except FloodWaitError as e:
+                                emit_batch_status(f'⚠️ FloodWait {e.seconds}s...', 'uploading')
+                                await asyncio.sleep(e.seconds + 1)
+                                f_retries += 1
+                            except Exception as f_err:
+                                emit_batch_status(f'❌ Failed to upload {os.path.basename(f_path)}: {str(f_err)}', 'uploading')
+                                break
+                    uploaded_chunk = True
+            
+            await asyncio.sleep(2)
+            
         return True
         
     except FloodWaitError as e:
         emit_batch_status(f'⚠️ FloodWait {e.seconds}s...', 'uploading')
-        await asyncio.sleep(e.seconds)
-        # Retry after flood wait
+        await asyncio.sleep(e.seconds + 1)
         return await upload_single_batch(batch_files, target_channel, batch_number, total_batches_str)
     except Exception as e:
         emit_batch_status(f'❌ Error uploading batch: {str(e)}', 'uploading')

@@ -4,12 +4,18 @@ Telegram channel එකකින් තවත් channel එකකට media file
 
 ## 🚀 Features
 
-- පැරණි channel එකෙන් photos, videos, documents download කරයි
-- නව channel එකට upload කරයි
+- **Media Transfer**: පැරණි channel එකෙන් photos, videos, documents download කරයි සහ නව channel එකට upload කරයි
+- **Web Interface**: Modern web UI with real-time progress tracking
+- **Channel Inspector**: සියලු channels සහ groups list කරගන්න IDs සමඟ
+- **Content Downloader**: Single message links වලින් media download හෝ forward කරන්න
+- **Batch Downloader 📦 NEW**: Message range එකක් bulk download & batch upload කරන්න
+  - Progressive processing (6GB chunks)
+  - VPS disk space safe (max ~6GB usage)
+  - Auto cleanup after each batch
+  - Real-time progress tracking
 - Original captions preserve කරයි
-- Progress tracking
-- Automatic rate limiting
-- පසුව download කළ files delete කරන්න option එක
+- Automatic rate limiting සහ FloodWait handling
+- Docker support for VPS deployment
 
 ## 📋 Prerequisites
 
@@ -80,6 +86,74 @@ python find_channel_id.py
   - හෝ `find_channel_id.py` run කරලා ID එක ගන්න
 
 ## 🎯 Usage
+
+### Option A: Web Interface (Recommended) 🌐
+
+Web interface එක start කරන්න:
+
+```bash
+py web_app.py
+```
+
+Browser එකෙන් **http://localhost:3000** වෙත යන්න.
+
+#### Web Features:
+
+**Tab 1: Credentials & Login**
+- API credentials enter කරන්න
+- Telegram login කරන්න
+- Login history view කරන්න
+
+**Tab 2: Find Channel IDs**
+- ඔබේ channels සහ groups list කරන්න
+- IDs copy කරන්න
+- Private/Public identify කරන්න
+
+**Tab 3: Media Transfer**
+- Source → Target channel transfer
+- Real-time progress tracking
+- Statistics display
+
+**Tab 4: Content Downloader**
+- Single message link paste කරන්න
+- Download to device හෝ forward to channel
+
+**Tab 5: Batch Downloader 📦**
+- Message range එකක් bulk download කරන්න
+- **VPS Disk Safe**: Progressive processing (max ~6GB disk usage)
+- Auto batching (6GB chunks)
+- Real-time progress tracking
+
+##### Batch Downloader භාවිතය:
+
+1. **Base Link** enter කරන්න (message ID නැතිව):
+   ```
+   Private: https://t.me/c/3916408757/
+   Public:  https://t.me/channelname/
+   ```
+
+2. **Message Range** set කරන්න:
+   - Start ID: `1`
+   - End ID: `50`
+
+3. **Target Channel** enter කරන්න:
+   ```
+   -1004460843642  හෝ  @targetchannel
+   ```
+
+4. **Max Batch Size**: `6 GB` (recommended for VPS)
+
+5. **Start Process!**
+
+##### Progressive Processing:
+```
+Download 6GB → Upload Batch 1 → Delete → Download Next 6GB
+```
+මේ හින්දා VPS disk එකේ maximum ~6GB විතරයි use වෙන්නේ. 7GB VPS එකක perfect!
+
+---
+
+### Option B: Command Line Script
 
 ### පළමුව: Channel IDs හොයා ගන්න
 
@@ -210,12 +284,42 @@ Channel එක private හෝ ඔබ member කෙනෙක් නෙමෙය�
 - පළමු වතාවට run කරනකොට `session.session` file එකක් create වෙයි - මේක login details save කරයි
 - Media files default වශයෙන් `telegram_downloads` folder එකට download වෙයි
 - `delete_after_upload=True` set කරොත් disk space save වෙයි
+- Web app එක background එකේ auto-cleanup කරයි (60 seconds older files)
+- Batch Downloader progressive processing භාවිතා කරයි - VPS disk space protect කරන්න
+
+## 🌐 VPS Deployment
+
+### Quick Deploy (Docker):
+
+```bash
+chmod +x deploy.sh
+./deploy.sh
+```
+
+Browser එකෙන්: `http://YOUR_VPS_IP:3000`
+
+### VPS Disk Space Management:
+
+Batch Downloader එක **VPS safe** කරන්න design කරලා තියෙනවා:
+- Progressive download & upload
+- Maximum ~6GB disk usage එකවර
+- Auto cleanup after each batch
+- Perfect for 7-10GB VPS
+
+Details: **VPS_SETUP.md** file එක බලන්න
 
 ## 🔐 Security
 
 - API credentials secure කරන්න
 - `session.session` file එක share නොකරන්න
 - Public repositories වලට credentials commit නොකරන්න
+
+## 📚 Documentation
+
+- **QUICK_START.md** - Quick start guide (සිංහලෙන්)
+- **VPS_SETUP.md** - VPS deployment guide (සිංහලෙන්)
+- **DOCKER_QUICK_START.md** - Docker deployment guide
+- **BATCH_DOWNLOADER_GUIDE.md** - Batch downloader detailed guide
 
 ## 📄 License
 

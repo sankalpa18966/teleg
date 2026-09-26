@@ -137,3 +137,103 @@ Admin නැත්නම්:
 ## 📞 Need Help?
 
 Problems තියෙනවනම් **README.md** file එකේ **Troubleshooting** section එක බලන්න!
+
+---
+
+# 🌐 Web Interface Guide
+
+## Starting the Web App
+
+```bash
+py web_app.py
+```
+
+මේකෙන් web interface එක start වෙයි **http://localhost:3000** එකේ.
+
+## Web Interface Features
+
+### 1️⃣ **Credentials & Login Tab**
+- API credentials enter කරන්න
+- Telegram login කරන්න
+- Login history බලන්න
+
+### 2️⃣ **Find Channel IDs Tab**
+- ඔබේ සියලු channels සහ groups list කරගන්න
+- Channel IDs copy කරගන්න
+- Private/Public channels identify කරන්න
+
+### 3️⃣ **Media Transfer Tab**
+- Source සහ target channels set කරන්න
+- Media transfer process run කරන්න
+- Real-time progress tracking
+- Success/Failed/Skipped statistics
+
+### 4️⃣ **Content Downloader Tab**
+- Single message link එකක් paste කරන්න
+- Media download කරගන්න ඔබේ device එකට
+- හෝ වෙනත් channel එකක forward/upload කරන්න
+- Real-time download progress
+
+### 5️⃣ **Batch Downloader Tab** 📦 NEW!
+- **Message range** එකක් download කරන්න (උදාහරණ: messages 1-50)
+- **Automatic batching** - 6GB බැගින් groups කරයි
+- **Batch upload** - Groups විදියට target channel එකට upload කරයි
+- **Progress tracking** - Download, batching, upload phases
+- **Smart cleanup** - Upload කරපු පසු auto delete
+
+#### Batch Downloader භාවිතය:
+
+1. **Base Link:** Channel URL එක message ID නැතිව
+   - Private: `https://t.me/c/3916408757/`
+   - Public: `https://t.me/channelname/`
+
+2. **Message Range:**
+   - Start ID: `1` (පළමු message)
+   - End ID: `50` (අවසාන message)
+
+3. **Target Channel:** Upload කරන channel එකේ ID හෝ username
+   - `-1004460843642` හෝ `@targetchannel`
+
+4. **Max Batch Size:** Batch එකක max size (default: 6GB)
+
+5. **Delete After:** Upload කරපු පසු files delete කරන්නද? (recommended ✅)
+
+6. **Start Process** ක්ලික් කරන්න!
+
+#### මෙහෙම වෙනවා:
+
+```
+Phase 1: 📥 DOWNLOADING
+├─ Message 1 → video1.mp4 (234 MB) ✅
+├─ Message 2 → video2.mp4 (456 MB) ✅
+├─ Message 3 → video3.mp4 (189 MB) ✅
+└─ ... (messages 4-50)
+
+Phase 2: 📦 BATCHING
+├─ Grouping files by 6GB limit
+├─ Batch 1: 15 files (5.2 GB)
+└─ Batch 2: 35 files (4.8 GB)
+
+Phase 3: 📤 UPLOADING
+├─ Batch 1/2 → Upload as media group ✅
+├─ Wait 5 seconds...
+└─ Batch 2/2 → Upload as media group ✅
+
+Phase 4: 🗑️ CLEANUP
+└─ Delete all downloaded files ✅
+
+✅ Complete!
+```
+
+#### Benefits:
+
+- **කාලය save කරයි:** Bulk operations
+- **Organized uploads:** Groups විදියට upload
+- **Space efficient:** Auto cleanup
+- **Progress visibility:** Real-time tracking
+- **Resumable:** Stopped නම් ආයෙ start කරන්න පුළුවන්
+
+## 🚀 Running on VPS
+
+VPS එකක run කරන්න **DOCKER_QUICK_START.md** හෝ **VPS_SETUP.md** බලන්න.
+

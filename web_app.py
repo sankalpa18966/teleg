@@ -555,6 +555,28 @@ def parse_telegram_url(url):
     raise ValueError("Invalid Telegram URL. Supported formats:\n• https://t.me/c/4458181295/198 (Private)\n• https://t.me/channelname/198 (Public)\n• https://t.me/+invite_hash/198 (Invite)")
 
 
+def parse_telegram_base_link(link):
+    """Parse base link and extract channel info for batch operations"""
+    link = link.strip().rstrip('/')
+    
+    # Private channel: https://t.me/c/1234567890
+    m_private = re.match(r'https?://t\.me/c/(?P<chan_id>\d+)$', link)
+    if m_private:
+        chan_id_str = m_private.group('chan_id')
+        if chan_id_str.startswith('100'):
+            peer = int(f"-{chan_id_str}")
+        else:
+            peer = int(f"-100{chan_id_str}")
+        return peer
+    
+    # Public channel: https://t.me/channelname
+    m_public = re.match(r'https?://t\.me/(?P<username>[^/]+)$', link)
+    if m_public:
+        return m_public.group('username')
+    
+    raise ValueError("Invalid base link format. Expected: https://t.me/c/CHANNEL_ID or https://t.me/channelname")
+
+
 async def fetch_message_by_url(client, parsed):
     peer = parsed['peer']
     msg_id = parsed['msg_id']
@@ -740,6 +762,312 @@ def clear_temp():
                 except Exception:
                     pass
     return jsonify({'status': 'success', 'message': f'Cleaned {count} temporary files from VPS'})
+
+
+# ── Batch Downloader ────────────────────────────────────────────────────────────
+
+batch_status = {
+    'is_running': False,
+    'phase': 'idle',  # idle, downloading, batching, uploading, complete
+    'current_item': 0,
+    'total_items': 0,
+    'downloaded_count': 0,
+    'batch_count': 0,
+    'current_batch': 0,
+    'message': 'Ready',
+    'total_size_mb': 0
+}
+
+
+def emit_batch_status(message, phase=None, current=None, total=None):
+    """Emit batch process status updates"""
+    global batch_status
+    batch_status['message'] = message
+    if phase:
+        batch_status['phase'] = phase
+    if current is not None:
+        batch_status['current_item'] = current
+    if total is not None:
+        batch_status['total_items'] = total
+    socketio.emit('batch_status_update', batch_status)
+
+
+def format_size_mb(bytes_size):
+    """Convert bytes to MB"""
+    return round(bytes_size / (1024 * 1024), 2)
+
+
+async def batch_download_and_upload(base_link, start_id, end_id, target_channel, max_batch_gb=6, delete_after=True):
+    """Download range of messages and upload as batches with disk space management"""
+    global client, batch_status
+    
+    try:
+        # Parse base link
+        peer = parse_telegram_base_link(base_link)
+        entity = await client.get_entity(peer)
+        
+        total_messages = end_id - start_id + 1
+        batch_status['total_items'] = total_messages
+        emit_batch_status(f'📥 Starting progressive download (max {max_batch_gb}GB per batch)...', 'downloading', 0, total_messages)
+        
+        max_batch_bytes = max_batch_gb * 1024 * 1024 * 1024
+        
+        # Resolve target channel
+        def _resolve(ch):
+            if isinstance(ch, str) and ch.lstrip('-').isdigit():
+                return int(ch)
+            return ch
+        
+        target = _resolve(target_channel)
+        
+        # Progressive batch processing
+        current_batch_files = []
+        current_batch_size = 0
+        batch_number = 0
+        total_uploaded_batches = 0
+        
+        # Download and process in chunks
+        for msg_id in range(start_id, end_id + 1):
+            if not batch_status['is_running']:
+                # Upload any remaining files before stopping
+                if current_batch_files:
+                    batch_number += 1
+                    await upload_single_batch(current_batch_files, target, batch_number, '?')
+                    if delete_after:
+                        cleanup_files(current_batch_files)
+                emit_batch_status('⏸️ Process stopped by user', 'idle')
+                break
+            
+            current_idx = msg_id - start_id + 1
+            emit_batch_status(
+                f'📥 Downloading message {msg_id}... (Batch size: {format_size_mb(current_batch_size)} MB / {max_batch_gb * 1024} MB)',
+                'downloading', current_idx, total_messages
+            )
+            
+            try:
+                message = await client.get_messages(entity, ids=msg_id)
+                
+                if message and message.media:
+                    file_path = await client.download_media(message, DOWNLOAD_DIR)
+                    
+                    if file_path and os.path.exists(file_path):
+                        file_size = os.path.getsize(file_path)
+                        
+                        # Check if adding this file exceeds batch limit
+                        if current_batch_size + file_size > max_batch_bytes and current_batch_files:
+                            # Upload current batch before continuing
+                            batch_number += 1
+                            batch_status['current_batch'] = batch_number
+                            
+                            emit_batch_status(
+                                f'💾 Batch {batch_number} full ({format_size_mb(current_batch_size)} MB) - uploading now...',
+                                'uploading', current_idx, total_messages
+                            )
+                            
+                            success = await upload_single_batch(current_batch_files, target, batch_number, '?')
+                            
+                            if success:
+                                total_uploaded_batches += 1
+                                emit_batch_status(f'✅ Batch {batch_number} uploaded!', 'uploading')
+                                
+                                # Cleanup uploaded files to free disk space
+                                if delete_after:
+                                    cleanup_files(current_batch_files)
+                                    emit_batch_status(f'🗑️ Cleaned batch {batch_number} files to free disk space', 'downloading')
+                            
+                            # Reset for next batch
+                            current_batch_files = []
+                            current_batch_size = 0
+                            
+                            # Small delay between batches
+                            await asyncio.sleep(3)
+                        
+                        # Add file to current batch
+                        current_batch_files.append({
+                            'path': file_path,
+                            'size': file_size,
+                            'caption': message.message if message.message else None,
+                            'msg_id': msg_id
+                        })
+                        current_batch_size += file_size
+                        batch_status['downloaded_count'] += 1
+                        
+                        emit_batch_status(
+                            f'✅ Downloaded {os.path.basename(file_path)} ({format_size_mb(file_size)} MB)',
+                            'downloading', current_idx, total_messages
+                        )
+                    else:
+                        emit_batch_status(f'⚠️ No media in message {msg_id}', 'downloading', current_idx, total_messages)
+                else:
+                    emit_batch_status(f'⏭️ Skipping message {msg_id} (no media)', 'downloading', current_idx, total_messages)
+                
+                await asyncio.sleep(1)
+                
+            except Exception as e:
+                emit_batch_status(f'❌ Error downloading {msg_id}: {str(e)}', 'downloading', current_idx, total_messages)
+        
+        # Upload any remaining files
+        if current_batch_files and batch_status['is_running']:
+            batch_number += 1
+            batch_status['current_batch'] = batch_number
+            
+            emit_batch_status(
+                f'📤 Uploading final batch {batch_number} ({len(current_batch_files)} files, {format_size_mb(current_batch_size)} MB)...',
+                'uploading', total_messages, total_messages
+            )
+            
+            success = await upload_single_batch(current_batch_files, target, batch_number, str(batch_number))
+            
+            if success:
+                total_uploaded_batches += 1
+                emit_batch_status(f'✅ Final batch uploaded!', 'uploading')
+                
+                if delete_after:
+                    cleanup_files(current_batch_files)
+        
+        batch_status['batch_count'] = batch_number
+        batch_status['is_running'] = False
+        
+        emit_batch_status(
+            f'✅ Process complete! Downloaded & uploaded {total_uploaded_batches} batch(es)',
+            'complete'
+        )
+        
+    except Exception as e:
+        batch_status['is_running'] = False
+        emit_batch_status(f'❌ Error: {str(e)}', 'complete')
+
+
+async def upload_single_batch(batch_files, target_channel, batch_number, total_batches_str):
+    """Upload a single batch as media group"""
+    try:
+        batch_size = sum(f['size'] for f in batch_files)
+        
+        media_files = []
+        for idx, file_info in enumerate(batch_files, 1):
+            file_path = file_info['path']
+            caption = file_info.get('caption', '')
+            
+            # Add batch info to first file
+            if idx == 1:
+                batch_caption = f"📦 Batch {batch_number}/{total_batches_str} | {len(batch_files)} files | {format_size_mb(batch_size)} MB\n"
+                if caption:
+                    caption = batch_caption + "\n" + caption
+                else:
+                    caption = batch_caption
+            
+            media_files.append((file_path, caption if idx == 1 else ''))
+        
+        # Upload
+        if len(media_files) > 1:
+            files_to_send = [f[0] for f in media_files]
+            await client.send_file(
+                target_channel,
+                files_to_send,
+                caption=media_files[0][1],
+                supports_streaming=True
+            )
+        else:
+            await client.send_file(
+                target_channel,
+                media_files[0][0],
+                caption=media_files[0][1],
+                supports_streaming=True
+            )
+        
+        return True
+        
+    except FloodWaitError as e:
+        emit_batch_status(f'⚠️ FloodWait {e.seconds}s...', 'uploading')
+        await asyncio.sleep(e.seconds)
+        # Retry after flood wait
+        return await upload_single_batch(batch_files, target_channel, batch_number, total_batches_str)
+    except Exception as e:
+        emit_batch_status(f'❌ Error uploading batch: {str(e)}', 'uploading')
+        return False
+
+
+def cleanup_files(file_list):
+    """Delete a list of files"""
+    for file_info in file_list:
+        try:
+            if os.path.exists(file_info['path']):
+                os.remove(file_info['path'])
+        except Exception:
+            pass
+
+
+def run_batch_process(base_link, start_id, end_id, target_channel, max_batch_gb, delete_after):
+    """Thread wrapper for batch process"""
+    try:
+        ensure_client()
+        run_async(batch_download_and_upload(base_link, start_id, end_id, target_channel, max_batch_gb, delete_after))
+    except Exception as e:
+        batch_status['is_running'] = False
+        emit_batch_status(f'❌ Error: {str(e)}', 'complete')
+
+
+@app.route('/api/batch/start', methods=['POST'])
+def start_batch_download():
+    """Start batch download and upload process"""
+    global batch_status
+    
+    if not transfer_status['logged_in']:
+        return jsonify({'status': 'error', 'message': 'Not logged in'}), 400
+    
+    if batch_status['is_running']:
+        return jsonify({'status': 'error', 'message': 'Batch process already running'}), 400
+    
+    data = request.get_json() or {}
+    base_link = data.get('base_link', '').strip()
+    start_id = data.get('start_id')
+    end_id = data.get('end_id')
+    target_channel = data.get('target_channel', '').strip()
+    max_batch_gb = data.get('max_batch_gb', 6)
+    delete_after = data.get('delete_after', True)
+    
+    if not base_link or not target_channel:
+        return jsonify({'status': 'error', 'message': 'Base link and target channel are required'}), 400
+    
+    try:
+        start_id = int(start_id)
+        end_id = int(end_id)
+        
+        if start_id <= 0 or end_id <= 0 or start_id > end_id:
+            return jsonify({'status': 'error', 'message': 'Invalid message ID range'}), 400
+            
+    except (TypeError, ValueError):
+        return jsonify({'status': 'error', 'message': 'Start ID and End ID must be valid numbers'}), 400
+    
+    # Reset batch status
+    batch_status.update({
+        'is_running': True,
+        'phase': 'starting',
+        'current_item': 0,
+        'total_items': 0,
+        'downloaded_count': 0,
+        'batch_count': 0,
+        'current_batch': 0,
+        'total_size_mb': 0
+    })
+    
+    # Start in background thread
+    t = threading.Thread(
+        target=run_batch_process,
+        args=(base_link, start_id, end_id, target_channel, max_batch_gb, delete_after),
+        daemon=True
+    )
+    t.start()
+    
+    return jsonify({'status': 'success', 'message': 'Batch process started'})
+
+
+@app.route('/api/batch/stop', methods=['POST'])
+def stop_batch_download():
+    """Stop batch download process"""
+    global batch_status
+    batch_status['is_running'] = False
+    return jsonify({'status': 'success', 'message': 'Batch process stopping...'})
 
 
 # ══════════════════════════════════════════════════════════════════════════════

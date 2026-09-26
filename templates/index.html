@@ -478,6 +478,9 @@
             <button class="tab-btn" onclick="switchTab('downloaderTab')">
                 <i class="fa-solid fa-download"></i> 4. Content Downloader
             </button>
+            <button class="tab-btn" onclick="switchTab('batchTab')">
+                <i class="fa-solid fa-layer-group"></i> 5. Batch Downloader
+            </button>
         </nav>
 
         <!-- TAB 1: LOGIN -->
@@ -686,6 +689,90 @@
             </div>
         </div>
 
+        <!-- TAB 5: BATCH DOWNLOADER -->
+        <div id="batchTab" class="tab-content">
+            <p style="font-size: 14px; color: var(--text-muted); margin-bottom: 20px;">
+                📦 Download multiple messages by range and upload as batches (max 6GB per batch)
+            </p>
+
+            <div class="form-grid">
+                <div class="form-group full-width">
+                    <label for="batchBaseLink">Base Link (Channel URL without message ID)</label>
+                    <input type="text" id="batchBaseLink" placeholder="https://t.me/c/3916408757/ or https://t.me/channelname/">
+                    <small style="font-size: 11px; color: var(--text-muted); margin-top: 4px; display: block;">
+                        💡 Private: https://t.me/c/CHANNEL_ID/ | Public: https://t.me/channelname/
+                    </small>
+                </div>
+                <div class="form-group">
+                    <label for="batchStartId">Start Message ID</label>
+                    <input type="number" id="batchStartId" placeholder="1" min="1">
+                </div>
+                <div class="form-group">
+                    <label for="batchEndId">End Message ID</label>
+                    <input type="number" id="batchEndId" placeholder="50" min="1">
+                </div>
+                <div class="form-group">
+                    <label for="batchTargetChannel">Target Channel ID / Username</label>
+                    <input type="text" id="batchTargetChannel" placeholder="e.g. -1004460843642 or @target">
+                </div>
+                <div class="form-group">
+                    <label for="batchMaxSize">Max Batch Size (GB)</label>
+                    <input type="number" id="batchMaxSize" placeholder="6" min="1" max="10" value="6">
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; color: var(--text-main);">
+                    <input type="checkbox" id="batchDeleteAfter" checked style="width: auto;">
+                    <span>🗑️ Delete downloaded files after upload (recommended to save disk space)</span>
+                </label>
+            </div>
+
+            <!-- Batch Progress Card -->
+            <div id="batchProgressCard" class="progress-card">
+                <div class="progress-header">
+                    <span id="batchMessage" style="color: var(--primary);">Status: Ready</span>
+                    <span id="batchPhase" style="font-size: 12px; padding: 4px 8px; background: rgba(56, 189, 248, 0.2); border-radius: 6px;">Idle</span>
+                </div>
+                <div class="progress-bar-bg">
+                    <div class="progress-bar-fill" id="batchProgressBarFill"></div>
+                </div>
+
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-val" id="batchCurrent">0</div>
+                        <div class="stat-lbl">Current</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-val" id="batchTotal" style="color: var(--text-main);">0</div>
+                        <div class="stat-lbl">Total Messages</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-val" id="batchDownloaded" style="color: var(--success);">0</div>
+                        <div class="stat-lbl">Downloaded</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-val" id="batchBatches" style="color: var(--accent);">0 / 0</div>
+                        <div class="stat-lbl">Batch Progress</div>
+                    </div>
+                </div>
+
+                <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid var(--card-border); display: flex; justify-content: space-between; font-size: 12px; color: var(--text-muted);">
+                    <span>📦 Total Size: <strong id="batchTotalSize" style="color: var(--primary);">0 MB</strong></span>
+                    <span>⚙️ Max per batch: <strong style="color: var(--primary);">6 GB</strong></span>
+                </div>
+            </div>
+
+            <div style="display: flex; gap: 10px;">
+                <button id="startBatchBtn" onclick="startBatchProcess()" class="btn btn-success">
+                    <i class="fa-solid fa-play"></i> Start Batch Download & Upload
+                </button>
+                <button id="stopBatchBtn" onclick="stopBatchProcess()" class="btn btn-danger" style="display: none;">
+                    <i class="fa-solid fa-stop"></i> Stop Process
+                </button>
+            </div>
+        </div>
+
     </div>
 
     <!-- Toast Notification Container -->
@@ -713,6 +800,10 @@
             document.getElementById('linkProgressBarFill').style.width = data.percent + '%';
             document.getElementById('linkProgressSize').textContent = `${data.mb_current} MB / ${data.mb_total} MB`;
             document.getElementById('linkProgressAction').textContent = data.action;
+        });
+
+        socket.on('batch_status_update', (data) => {
+            updateBatchUI(data);
         });
 
         // Tab Switching Logic
@@ -1111,8 +1202,125 @@
             }
         }
 
+        // ── Batch Downloader Functions ─────────────────────────────────────────
+
+        function updateBatchUI(data) {
+            document.getElementById('batchMessage').textContent = data.message;
+            document.getElementById('batchPhase').textContent = data.phase.toUpperCase();
+            document.getElementById('batchCurrent').textContent = data.current_item;
+            document.getElementById('batchTotal').textContent = data.total_items;
+            document.getElementById('batchDownloaded').textContent = data.downloaded_count;
+            document.getElementById('batchBatches').textContent = `${data.current_batch} / ${data.batch_count}`;
+            document.getElementById('batchTotalSize').textContent = data.total_size_mb + ' MB';
+
+            // Progress bar
+            const percent = data.total_items > 0 ? (data.current_item / data.total_items) * 100 : 0;
+            document.getElementById('batchProgressBarFill').style.width = percent + '%';
+
+            // Phase badge color
+            const phaseBadge = document.getElementById('batchPhase');
+            phaseBadge.style.background = 
+                data.phase === 'downloading' ? 'rgba(56, 189, 248, 0.2)' :
+                data.phase === 'batching' ? 'rgba(245, 158, 11, 0.2)' :
+                data.phase === 'uploading' ? 'rgba(139, 92, 246, 0.2)' :
+                data.phase === 'complete' ? 'rgba(16, 185, 129, 0.2)' :
+                'rgba(100, 116, 139, 0.2)';
+
+            phaseBadge.style.color =
+                data.phase === 'downloading' ? '#38bdf8' :
+                data.phase === 'batching' ? '#f59e0b' :
+                data.phase === 'uploading' ? '#c084fc' :
+                data.phase === 'complete' ? '#10b981' :
+                '#94a3b8';
+
+            // Button states
+            const startBtn = document.getElementById('startBatchBtn');
+            const stopBtn = document.getElementById('stopBatchBtn');
+
+            if (data.is_running) {
+                startBtn.style.display = 'none';
+                stopBtn.style.display = 'inline-flex';
+            } else {
+                startBtn.style.display = 'inline-flex';
+                stopBtn.style.display = 'none';
+            }
+        }
+
+        async function startBatchProcess() {
+            const baseLink = document.getElementById('batchBaseLink').value.trim();
+            const startId = parseInt(document.getElementById('batchStartId').value);
+            const endId = parseInt(document.getElementById('batchEndId').value);
+            const targetChannel = document.getElementById('batchTargetChannel').value.trim();
+            const maxBatchGb = parseInt(document.getElementById('batchMaxSize').value) || 6;
+            const deleteAfter = document.getElementById('batchDeleteAfter').checked;
+
+            // Validation
+            if (!baseLink) {
+                showToast('Please enter base link', 'error');
+                return;
+            }
+            if (!startId || !endId) {
+                showToast('Please enter valid start and end message IDs', 'error');
+                return;
+            }
+            if (startId > endId) {
+                showToast('Start ID must be less than or equal to End ID', 'error');
+                return;
+            }
+            if (!targetChannel) {
+                showToast('Please enter target channel', 'error');
+                return;
+            }
+
+            const btn = document.getElementById('startBatchBtn');
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Starting...';
+
+            try {
+                const res = await fetch('/api/batch/start', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        base_link: baseLink,
+                        start_id: startId,
+                        end_id: endId,
+                        target_channel: targetChannel,
+                        max_batch_gb: maxBatchGb,
+                        delete_after: deleteAfter
+                    })
+                });
+
+                const data = await res.json();
+
+                if (res.ok) {
+                    showToast(data.message, 'success');
+                } else {
+                    showToast(data.message, 'error');
+                    btn.disabled = false;
+                    btn.innerHTML = '<i class="fa-solid fa-play"></i> Start Batch Download & Upload';
+                }
+            } catch (err) {
+                showToast('Error: ' + err.message, 'error');
+                btn.disabled = false;
+                btn.innerHTML = '<i class="fa-solid fa-play"></i> Start Batch Download & Upload';
+            }
+        }
+
+        async function stopBatchProcess() {
+            try {
+                const res = await fetch('/api/batch/stop', { method: 'POST' });
+                const data = await res.json();
+                if (res.ok) {
+                    showToast(data.message, 'info');
+                }
+            } catch (err) {
+                showToast('Error: ' + err.message, 'error');
+            }
+        }
+
         // Init
         loadLoginLogs();
+
     </script>
 </body>
 </html>

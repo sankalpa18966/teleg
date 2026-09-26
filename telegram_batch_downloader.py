@@ -20,7 +20,7 @@ PHONE = os.getenv('PHONE', '+94714527083')
 # Target channel to upload batches
 TARGET_CHANNEL = os.getenv('TARGET_CHANNEL', -1004460843642)
 
-DOWNLOAD_DIR = 'telegram_downloads'
+DOWNLOAD_DIR = os.path.abspath('telegram_downloads')
 SESSION_DIR = 'session_data'
 os.makedirs(SESSION_DIR, exist_ok=True)
 SESSION_PATH = os.path.join(SESSION_DIR, 'session')

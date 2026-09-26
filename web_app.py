@@ -29,7 +29,7 @@ SESSION_PATH = os.path.join(SESSION_DIR, 'session')
 TRANSFERRED_DB = os.path.join(SESSION_DIR, 'transferred_messages.json')
 CONFIG_FILE = os.path.join(SESSION_DIR, 'config.json')
 LOGIN_LOG = os.path.join(SESSION_DIR, 'login_log.json')
-DOWNLOAD_DIR = 'telegram_downloads'
+DOWNLOAD_DIR = os.path.abspath('telegram_downloads')
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 # ── Auto-cleaner for temporary downloads ───────────────────────────────────────
@@ -975,7 +975,7 @@ async def upload_single_batch(batch_files, target_channel, batch_number, total_b
         total_chunks = len(chunks)
         
         for chunk_idx, chunk in enumerate(chunks, 1):
-            files_to_send = [file_info['path'] for file_info in chunk]
+            files_to_send = [os.path.abspath(file_info['path']) for file_info in chunk]
             
             emit_batch_status(
                 f'📤 Uploading batch {batch_number} (group {chunk_idx}/{total_chunks}, {len(chunk)} files)...',

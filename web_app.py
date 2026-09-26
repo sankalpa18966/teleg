@@ -949,49 +949,8 @@ async def batch_download_and_upload(base_link, start_id, end_id, target_channel,
         emit_batch_status(f'❌ Error: {str(e)}', 'complete')
 
 
-async def prepare_input_media(client, file_path):
-    """Build proper InputMedia with explicit video attributes so Telegram never drops album items"""
-    file_path = os.path.abspath(file_path)
-    file_name = os.path.basename(file_path)
-    ext = os.path.splitext(file_name)[1].lower()
-    
-    uploaded_file = await client.upload_file(file_path)
-    
-    is_photo = ext in ('.jpg', '.jpeg', '.png', '.webp')
-    is_video = ext in ('.mp4', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.webm', '.m4v', '.3gp', '.ts')
-    
-    if is_photo:
-        return InputMediaUploadedPhoto(file=uploaded_file)
-        
-    mime_type, _ = mimetypes.guess_type(file_path)
-    if not mime_type:
-        mime_type = 'video/mp4' if is_video else 'application/octet-stream'
-        
-    attrs = []
-    try:
-        res_attrs = utils.get_attributes(file_path)
-        if res_attrs:
-            attrs = list(res_attrs)
-    except Exception:
-        attrs = []
-        
-    if not any(isinstance(a, DocumentAttributeFilename) for a in attrs):
-        attrs.append(DocumentAttributeFilename(file_name=file_name))
-        
-    if is_video:
-        has_video_attr = any(isinstance(a, DocumentAttributeVideo) for a in attrs)
-        if not has_video_attr:
-            attrs.append(DocumentAttributeVideo(duration=0, w=1280, h=720, supports_streaming=True))
-            
-    return InputMediaUploadedDocument(
-        file=uploaded_file,
-        mime_type=mime_type,
-        attributes=attrs
-    )
-
-
 async def upload_single_batch(batch_files, target_channel, batch_number, total_batches_str):
-    """Upload batch files as Telegram Albums/Media Groups (max 10 files per album grid, like Phone upload)"""
+    """Upload batch files to target channel using Telethon send_file"""
     global client
     try:
         if not batch_files:
@@ -1011,19 +970,26 @@ async def upload_single_batch(batch_files, target_channel, batch_number, total_b
         except Exception:
             target_entity = target_resolved
         
-        # Telegram albums (grids) hold max 10 files per group (like phone upload)
+        # Collect absolute paths for existing downloaded files
+        files_to_send = []
+        for file_info in batch_files:
+            p = os.path.abspath(file_info['path'])
+            if os.path.exists(p):
+                files_to_send.append(p)
+                
+        if not files_to_send:
+            emit_batch_status('⚠️ No downloaded files found on disk to upload', 'uploading')
+            return False
+            
+        # Telegram albums support up to 10 files per group
         chunk_size = 10
-        chunks = [batch_files[i:i + chunk_size] for i in range(0, total_files, chunk_size)]
+        chunks = [files_to_send[i:i + chunk_size] for i in range(0, len(files_to_send), chunk_size)]
         total_chunks = len(chunks)
         
         uploaded_count = 0
         for chunk_idx, chunk in enumerate(chunks, 1):
-            files_to_send = [os.path.abspath(file_info['path']) for file_info in chunk if os.path.exists(os.path.abspath(file_info['path']))]
-            if not files_to_send:
-                continue
-                
             emit_batch_status(
-                f'📤 Uploading Album {chunk_idx}/{total_chunks} ({len(files_to_send)} files)...',
+                f'📤 Uploading group {chunk_idx}/{total_chunks} ({len(chunk)} files)...',
                 'uploading'
             )
             
@@ -1031,32 +997,23 @@ async def upload_single_batch(batch_files, target_channel, batch_number, total_b
             retry_count = 0
             while not uploaded_chunk and retry_count < 3:
                 try:
-                    if len(files_to_send) > 1:
-                        # Prepare explicit InputSingleMedia for native SendMultiMediaRequest album call
-                        single_medias = []
-                        for f_path in files_to_send:
-                            media_obj = await prepare_input_media(client, f_path)
-                            single_medias.append(InputSingleMedia(
-                                media=media_obj,
-                                random_id=random.randint(-2**63, 2**63 - 1),
-                                message=''
-                            ))
-                                
-                        await client(SendMultiMediaRequest(
-                            peer=target_entity,
-                            multi_media=single_medias
-                        ))
-                    else:
-                        media_obj = await prepare_input_media(client, files_to_send[0])
+                    if len(chunk) > 1:
+                        # Send as Telethon album
                         await client.send_file(
                             target_entity,
-                            media_obj,
-                            caption=None
+                            chunk
+                        )
+                    else:
+                        is_vid = chunk[0].lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.webm', '.m4v'))
+                        await client.send_file(
+                            target_entity,
+                            chunk[0],
+                            supports_streaming=is_vid
                         )
                     uploaded_chunk = True
-                    uploaded_count += len(files_to_send)
+                    uploaded_count += len(chunk)
                     emit_batch_status(
-                        f'✅ Uploaded Album {chunk_idx}/{total_chunks} ({len(files_to_send)} files)',
+                        f'✅ Uploaded group {chunk_idx}/{total_chunks} ({len(chunk)} files)',
                         'uploading'
                     )
                     await asyncio.sleep(2)
@@ -1065,18 +1022,18 @@ async def upload_single_batch(batch_files, target_channel, batch_number, total_b
                     await asyncio.sleep(e.seconds + 2)
                     retry_count += 1
                 except Exception as chunk_err:
-                    # Fallback to individual upload if album fails
-                    emit_batch_status(f'⚠️ Album upload failed ({str(chunk_err)}), uploading files individually...', 'uploading')
-                    for f_path in files_to_send:
+                    # Fallback to sending files individually if group fails
+                    emit_batch_status(f'⚠️ Group upload note ({str(chunk_err)}), sending files individually...', 'uploading')
+                    for f_path in chunk:
                         try:
-                            media_obj = await prepare_input_media(client, f_path)
+                            is_vid = f_path.lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.webm', '.m4v'))
                             await client.send_file(
                                 target_entity,
-                                media_obj,
-                                caption=None
+                                f_path,
+                                supports_streaming=is_vid
                             )
                             uploaded_count += 1
-                            await asyncio.sleep(1)
+                            await asyncio.sleep(1.5)
                         except Exception as f_err:
                             emit_batch_status(f'❌ Error uploading {os.path.basename(f_path)}: {str(f_err)}', 'uploading')
                     uploaded_chunk = True

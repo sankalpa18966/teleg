@@ -6,9 +6,9 @@ Supports: Login via web, Find Channel IDs, Media Transfer, Content Download
 
 from flask import Flask, render_template, request, jsonify, send_file, session
 from flask_socketio import SocketIO, emit
-from telethon import TelegramClient
+from telethon import TelegramClient, utils
 from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError, FloodWaitError
-from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument, Channel, Chat
+from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument, Channel, Chat, InputMediaUploadedDocument, InputMediaUploadedPhoto, DocumentAttributeVideo, DocumentAttributeFilename
 import asyncio
 import os
 import json
@@ -947,6 +947,45 @@ async def batch_download_and_upload(base_link, start_id, end_id, target_channel,
         emit_batch_status(f'❌ Error: {str(e)}', 'complete')
 
 
+async def prepare_input_media(client, file_path):
+    """Build proper InputMedia with explicit video attributes so Telegram never drops album items"""
+    file_path = os.path.abspath(file_path)
+    file_name = os.path.basename(file_path)
+    ext = os.path.splitext(file_name)[1].lower()
+    
+    uploaded_file = await client.upload_file(file_path)
+    
+    is_photo = ext in ('.jpg', '.jpeg', '.png', '.webp')
+    is_video = ext in ('.mp4', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.webm', '.m4v', '.3gp', '.ts')
+    
+    if is_photo:
+        return InputMediaUploadedPhoto(file=uploaded_file)
+        
+    mime_type, _ = mimetypes.guess_type(file_path)
+    if not mime_type:
+        mime_type = 'video/mp4' if is_video else 'application/octet-stream'
+        
+    attrs = []
+    try:
+        attrs = utils.get_attributes(file_path) or []
+    except Exception:
+        attrs = []
+        
+    if not any(isinstance(a, DocumentAttributeFilename) for a in attrs):
+        attrs.append(DocumentAttributeFilename(file_name=file_name))
+        
+    if is_video:
+        has_video_attr = any(isinstance(a, DocumentAttributeVideo) for a in attrs)
+        if not has_video_attr:
+            attrs.append(DocumentAttributeVideo(duration=0, w=1280, h=720, supports_streaming=True))
+            
+    return InputMediaUploadedDocument(
+        file=uploaded_file,
+        mime_type=mime_type,
+        attributes=attrs
+    )
+
+
 async def upload_single_batch(batch_files, target_channel, batch_number, total_batches_str):
     """Upload batch files as Telegram Albums/Media Groups (max 10 files per album grid, like Phone upload)"""
     global client
@@ -989,10 +1028,19 @@ async def upload_single_batch(batch_files, target_channel, batch_number, total_b
             while not uploaded_chunk and retry_count < 3:
                 try:
                     if len(files_to_send) > 1:
-                        # Send as Album Grid (max 10 files per group, like phone upload)
+                        # Prepare explicit InputMedia for all files in album to prevent Telegram server silent drops
+                        input_media_list = []
+                        for f_path in files_to_send:
+                            try:
+                                media_obj = await prepare_input_media(client, f_path)
+                                input_media_list.append(media_obj)
+                            except Exception as prep_err:
+                                emit_batch_status(f'⚠️ Media prep note ({os.path.basename(f_path)}): {prep_err}', 'uploading')
+                                input_media_list.append(f_path)
+                                
                         await client.send_file(
                             target_entity,
-                            files_to_send,
+                            input_media_list,
                             caption=None
                         )
                     else:

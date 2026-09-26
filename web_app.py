@@ -8,9 +8,11 @@ from flask import Flask, render_template, request, jsonify, send_file, session
 from flask_socketio import SocketIO, emit
 from telethon import TelegramClient, utils
 from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError, FloodWaitError
-from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument, Channel, Chat, InputMediaUploadedDocument, InputMediaUploadedPhoto, DocumentAttributeVideo, DocumentAttributeFilename
+from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument, Channel, Chat, InputMediaUploadedDocument, InputMediaUploadedPhoto, DocumentAttributeVideo, DocumentAttributeFilename, InputSingleMedia
+from telethon.tl.functions.messages import SendMultiMediaRequest
 import asyncio
 import os
+import random
 import json
 import re
 import io
@@ -1028,21 +1030,20 @@ async def upload_single_batch(batch_files, target_channel, batch_number, total_b
             while not uploaded_chunk and retry_count < 3:
                 try:
                     if len(files_to_send) > 1:
-                        # Prepare explicit InputMedia for all files in album to prevent Telegram server silent drops
-                        input_media_list = []
+                        # Prepare explicit InputSingleMedia for native SendMultiMediaRequest album call
+                        single_medias = []
                         for f_path in files_to_send:
-                            try:
-                                media_obj = await prepare_input_media(client, f_path)
-                                input_media_list.append(media_obj)
-                            except Exception as prep_err:
-                                emit_batch_status(f'⚠️ Media prep note ({os.path.basename(f_path)}): {prep_err}', 'uploading')
-                                input_media_list.append(f_path)
+                            media_obj = await prepare_input_media(client, f_path)
+                            single_medias.append(InputSingleMedia(
+                                media=media_obj,
+                                random_id=random.randint(-2**63, 2**63 - 1),
+                                message=''
+                            ))
                                 
-                        await client.send_file(
-                            target_entity,
-                            input_media_list,
-                            caption=None
-                        )
+                        await client(SendMultiMediaRequest(
+                            peer=target_entity,
+                            multi_media=single_medias
+                        ))
                     else:
                         is_vid = files_to_send[0].lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.webm', '.m4v'))
                         await client.send_file(

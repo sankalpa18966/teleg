@@ -948,7 +948,7 @@ async def batch_download_and_upload(base_link, start_id, end_id, target_channel,
 
 
 async def upload_single_batch(batch_files, target_channel, batch_number, total_batches_str):
-    """Upload all files in a batch individually to guarantee 100% delivery without Telegram album silent dropping"""
+    """Upload batch files as Telegram Albums/Media Groups (max 10 files per album grid, like Phone upload)"""
     global client
     try:
         if not batch_files:
@@ -968,46 +968,70 @@ async def upload_single_batch(batch_files, target_channel, batch_number, total_b
         except Exception:
             target_entity = target_resolved
         
+        # Telegram albums (grids) hold max 10 files per group (like phone upload)
+        chunk_size = 10
+        chunks = [batch_files[i:i + chunk_size] for i in range(0, total_files, chunk_size)]
+        total_chunks = len(chunks)
+        
         uploaded_count = 0
-        for idx, file_info in enumerate(batch_files, 1):
-            file_path = os.path.abspath(file_info['path'])
-            if not os.path.exists(file_path):
-                emit_batch_status(f'⚠️ File missing on disk: {os.path.basename(file_path)}', 'uploading')
+        for chunk_idx, chunk in enumerate(chunks, 1):
+            files_to_send = [os.path.abspath(file_info['path']) for file_info in chunk if os.path.exists(os.path.abspath(file_info['path']))]
+            if not files_to_send:
                 continue
                 
-            file_name = os.path.basename(file_path)
             emit_batch_status(
-                f'📤 Uploading media {idx}/{total_files}: {file_name}...',
+                f'📤 Uploading Album {chunk_idx}/{total_chunks} ({len(files_to_send)} files)...',
                 'uploading'
             )
             
-            sent = False
-            retries = 0
-            while not sent and retries < 3:
+            uploaded_chunk = False
+            retry_count = 0
+            while not uploaded_chunk and retry_count < 3:
                 try:
-                    is_vid = file_path.lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.webm', '.m4v'))
-                    await client.send_file(
-                        target_entity,
-                        file_path,
-                        caption=None,
-                        supports_streaming=is_vid
-                    )
-                    sent = True
-                    uploaded_count += 1
+                    if len(files_to_send) > 1:
+                        # Send as Album Grid (max 10 files per group, like phone upload)
+                        await client.send_file(
+                            target_entity,
+                            files_to_send,
+                            caption=None
+                        )
+                    else:
+                        is_vid = files_to_send[0].lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.webm', '.m4v'))
+                        await client.send_file(
+                            target_entity,
+                            files_to_send[0],
+                            caption=None,
+                            supports_streaming=is_vid
+                        )
+                    uploaded_chunk = True
+                    uploaded_count += len(files_to_send)
                     emit_batch_status(
-                        f'✅ Uploaded media {idx}/{total_files}: {file_name}',
+                        f'✅ Uploaded Album {chunk_idx}/{total_chunks} ({len(files_to_send)} files)',
                         'uploading'
                     )
-                    await asyncio.sleep(1.5)
+                    await asyncio.sleep(2)
                 except FloodWaitError as e:
                     emit_batch_status(f'⚠️ FloodWait {e.seconds}s during upload...', 'uploading')
                     await asyncio.sleep(e.seconds + 2)
-                    retries += 1
-                except Exception as e:
-                    emit_batch_status(f'❌ Error uploading {file_name}: {str(e)}', 'uploading')
-                    retries += 1
-                    await asyncio.sleep(2)
-        
+                    retry_count += 1
+                except Exception as chunk_err:
+                    # Fallback to individual upload if album fails
+                    emit_batch_status(f'⚠️ Album upload failed ({str(chunk_err)}), uploading files individually...', 'uploading')
+                    for f_path in files_to_send:
+                        try:
+                            is_vid = f_path.lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.webm', '.m4v'))
+                            await client.send_file(
+                                target_entity,
+                                f_path,
+                                caption=None,
+                                supports_streaming=is_vid
+                            )
+                            uploaded_count += 1
+                            await asyncio.sleep(1)
+                        except Exception as f_err:
+                            emit_batch_status(f'❌ Error uploading {os.path.basename(f_path)}: {str(f_err)}', 'uploading')
+                    uploaded_chunk = True
+            
         return uploaded_count > 0
         
     except Exception as e:

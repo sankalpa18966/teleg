@@ -969,7 +969,9 @@ async def prepare_input_media(client, file_path):
         
     attrs = []
     try:
-        attrs = utils.get_attributes(file_path) or []
+        res_attrs = utils.get_attributes(file_path)
+        if res_attrs:
+            attrs = list(res_attrs)
     except Exception:
         attrs = []
         
@@ -1045,12 +1047,11 @@ async def upload_single_batch(batch_files, target_channel, batch_number, total_b
                             multi_media=single_medias
                         ))
                     else:
-                        is_vid = files_to_send[0].lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.webm', '.m4v'))
+                        media_obj = await prepare_input_media(client, files_to_send[0])
                         await client.send_file(
                             target_entity,
-                            files_to_send[0],
-                            caption=None,
-                            supports_streaming=is_vid
+                            media_obj,
+                            caption=None
                         )
                     uploaded_chunk = True
                     uploaded_count += len(files_to_send)
@@ -1068,12 +1069,11 @@ async def upload_single_batch(batch_files, target_channel, batch_number, total_b
                     emit_batch_status(f'⚠️ Album upload failed ({str(chunk_err)}), uploading files individually...', 'uploading')
                     for f_path in files_to_send:
                         try:
-                            is_vid = f_path.lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.webm', '.m4v'))
+                            media_obj = await prepare_input_media(client, f_path)
                             await client.send_file(
                                 target_entity,
-                                f_path,
-                                caption=None,
-                                supports_streaming=is_vid
+                                media_obj,
+                                caption=None
                             )
                             uploaded_count += 1
                             await asyncio.sleep(1)

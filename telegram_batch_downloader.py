@@ -178,20 +178,8 @@ class TelegramBatchDownloader:
             chunks = [batch[i:i + chunk_size] for i in range(0, total_files, chunk_size)]
             
             for chunk_idx, chunk in enumerate(chunks, 1):
-                files_to_send = []
-                captions_to_send = []
-                
-                for file_idx, file_info in enumerate(chunk):
-                    file_path = file_info['path']
-                    caption = file_info.get('caption', '') or ''
-                    
-                    if chunk_idx == 1 and file_idx == 0:
-                        batch_caption = f"📦 Batch {batch_number}/{total_batches} | {total_files} files | {self.format_size(total_size)}"
-                        caption = f"{batch_caption}\n\n{caption}".strip() if caption else batch_caption
-                    
-                    files_to_send.append(file_path)
-                    captions_to_send.append(caption)
-                    print(f"  [{len(files_to_send)}/{len(chunk)}] Sub-group {chunk_idx}: {os.path.basename(file_path)}")
+                files_to_send = [file_info['path'] for file_info in chunk]
+                print(f"  Uploading Sub-group {chunk_idx}/{len(chunks)} ({len(files_to_send)} files)...")
                 
                 uploaded_chunk = False
                 retry_count = 0
@@ -201,7 +189,7 @@ class TelegramBatchDownloader:
                             await self.client.send_file(
                                 target_channel,
                                 files_to_send,
-                                caption=captions_to_send[0] if captions_to_send[0] else None,
+                                caption=None,
                                 supports_streaming=True
                             )
                         else:
@@ -209,7 +197,7 @@ class TelegramBatchDownloader:
                             await self.client.send_file(
                                 target_channel,
                                 files_to_send[0],
-                                caption=captions_to_send[0] if captions_to_send[0] else None,
+                                caption=None,
                                 supports_streaming=is_vid
                             )
                         uploaded_chunk = True
@@ -219,7 +207,7 @@ class TelegramBatchDownloader:
                         retry_count += 1
                     except Exception as chunk_err:
                         print(f"⚠️ Album upload failed ({chunk_err}), sending files individually...")
-                        for f_path, f_cap in zip(files_to_send, captions_to_send):
+                        for f_path in files_to_send:
                             sent_single = False
                             f_retries = 0
                             while not sent_single and f_retries < 3:
@@ -228,7 +216,7 @@ class TelegramBatchDownloader:
                                     await self.client.send_file(
                                         target_channel,
                                         f_path,
-                                        caption=f_cap if f_cap else None,
+                                        caption=None,
                                         supports_streaming=is_vid
                                     )
                                     sent_single = True

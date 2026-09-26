@@ -975,20 +975,7 @@ async def upload_single_batch(batch_files, target_channel, batch_number, total_b
         total_chunks = len(chunks)
         
         for chunk_idx, chunk in enumerate(chunks, 1):
-            files_to_send = []
-            captions_to_send = []
-            
-            for file_idx, file_info in enumerate(chunk):
-                file_path = file_info['path']
-                caption = file_info.get('caption', '') or ''
-                
-                # Add header info to the first file of the first chunk in the batch
-                if chunk_idx == 1 and file_idx == 0:
-                    batch_caption = f"📦 Batch {batch_number}/{total_batches_str} | {total_files} files | {format_size_mb(batch_size)} MB"
-                    caption = f"{batch_caption}\n\n{caption}".strip() if caption else batch_caption
-                
-                files_to_send.append(file_path)
-                captions_to_send.append(caption)
+            files_to_send = [file_info['path'] for file_info in chunk]
             
             emit_batch_status(
                 f'📤 Uploading batch {batch_number} (group {chunk_idx}/{total_chunks}, {len(chunk)} files)...',
@@ -1000,11 +987,11 @@ async def upload_single_batch(batch_files, target_channel, batch_number, total_b
             while not uploaded_chunk and retry_count < 3:
                 try:
                     if len(files_to_send) > 1:
-                        # Send album of max 10 files
+                        # Send album of max 10 files without caption
                         await client.send_file(
                             target_entity,
                             files_to_send,
-                            caption=captions_to_send[0] if captions_to_send[0] else None,
+                            caption=None,
                             supports_streaming=True
                         )
                     else:
@@ -1012,7 +999,7 @@ async def upload_single_batch(batch_files, target_channel, batch_number, total_b
                         await client.send_file(
                             target_entity,
                             files_to_send[0],
-                            caption=captions_to_send[0] if captions_to_send[0] else None,
+                            caption=None,
                             supports_streaming=is_vid
                         )
                     uploaded_chunk = True
@@ -1021,9 +1008,9 @@ async def upload_single_batch(batch_files, target_channel, batch_number, total_b
                     await asyncio.sleep(e.seconds + 1)
                     retry_count += 1
                 except Exception as chunk_err:
-                    # Fallback: If album upload fails (e.g. incompatible media types or Telethon group limit error), send files 1-by-1
+                    # Fallback: If album upload fails, send files 1-by-1 without caption
                     emit_batch_status(f'⚠️ Album upload failed ({str(chunk_err)}), uploading files individually...', 'uploading')
-                    for f_path, f_cap in zip(files_to_send, captions_to_send):
+                    for f_path in files_to_send:
                         sent_single = False
                         f_retries = 0
                         while not sent_single and f_retries < 3:
@@ -1032,7 +1019,7 @@ async def upload_single_batch(batch_files, target_channel, batch_number, total_b
                                 await client.send_file(
                                     target_entity,
                                     f_path,
-                                    caption=f_cap if f_cap else None,
+                                    caption=None,
                                     supports_streaming=is_vid
                                 )
                                 sent_single = True

@@ -174,66 +174,43 @@ class TelegramBatchDownloader:
                 return True
                 
             total_files = len(batch)
-            chunk_size = 10
-            chunks = [batch[i:i + chunk_size] for i in range(0, total_files, chunk_size)]
+            uploaded_count = 0
             
-            for chunk_idx, chunk in enumerate(chunks, 1):
-                files_to_send = [file_info['path'] for file_info in chunk]
-                print(f"  Uploading Sub-group {chunk_idx}/{len(chunks)} ({len(files_to_send)} files)...")
+            for idx, file_info in enumerate(batch, 1):
+                file_path = os.path.abspath(file_info['path'])
+                if not os.path.exists(file_path):
+                    print(f"⚠️ File missing on disk: {os.path.basename(file_path)}")
+                    continue
+                    
+                file_name = os.path.basename(file_path)
+                print(f"  [{idx}/{total_files}] Uploading: {file_name}...")
                 
-                uploaded_chunk = False
-                retry_count = 0
-                while not uploaded_chunk and retry_count < 3:
+                sent = False
+                retries = 0
+                while not sent and retries < 3:
                     try:
-                        if len(files_to_send) > 1:
-                            await self.client.send_file(
-                                target_channel,
-                                files_to_send,
-                                caption=None,
-                                supports_streaming=True
-                            )
-                        else:
-                            is_vid = files_to_send[0].lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.webm', '.m4v'))
-                            await self.client.send_file(
-                                target_channel,
-                                files_to_send[0],
-                                caption=None,
-                                supports_streaming=is_vid
-                            )
-                        uploaded_chunk = True
+                        is_vid = file_path.lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.webm', '.m4v'))
+                        await self.client.send_file(
+                            target_channel,
+                            file_path,
+                            caption=None,
+                            supports_streaming=is_vid
+                        )
+                        sent = True
+                        uploaded_count += 1
+                        print(f"  ✅ [{idx}/{total_files}] Uploaded: {file_name}")
+                        await asyncio.sleep(1.5)
                     except FloodWaitError as e:
                         print(f"⚠️ FloodWait! Waiting {e.seconds} seconds...")
-                        await asyncio.sleep(e.seconds + 1)
-                        retry_count += 1
-                    except Exception as chunk_err:
-                        print(f"⚠️ Album upload failed ({chunk_err}), sending files individually...")
-                        for f_path in files_to_send:
-                            sent_single = False
-                            f_retries = 0
-                            while not sent_single and f_retries < 3:
-                                try:
-                                    is_vid = f_path.lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.webm', '.m4v'))
-                                    await self.client.send_file(
-                                        target_channel,
-                                        f_path,
-                                        caption=None,
-                                        supports_streaming=is_vid
-                                    )
-                                    sent_single = True
-                                    await asyncio.sleep(1)
-                                except FloodWaitError as e:
-                                    print(f"⚠️ FloodWait! Waiting {e.seconds} seconds...")
-                                    await asyncio.sleep(e.seconds + 1)
-                                    f_retries += 1
-                                except Exception as f_err:
-                                    print(f"❌ Failed to upload {os.path.basename(f_path)}: {f_err}")
-                                    break
-                        uploaded_chunk = True
-                
-                await asyncio.sleep(2)
+                        await asyncio.sleep(e.seconds + 2)
+                        retries += 1
+                    except Exception as e:
+                        print(f"❌ Error uploading {file_name}: {e}")
+                        retries += 1
+                        await asyncio.sleep(2)
             
-            print(f"✅ Batch {batch_number} uploaded successfully!")
-            return True
+            print(f"✅ Batch {batch_number} completed ({uploaded_count}/{total_files} files uploaded)!")
+            return uploaded_count > 0
             
         except FloodWaitError as e:
             wait_time = e.seconds

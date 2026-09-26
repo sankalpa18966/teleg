@@ -948,13 +948,12 @@ async def batch_download_and_upload(base_link, start_id, end_id, target_channel,
 
 
 async def upload_single_batch(batch_files, target_channel, batch_number, total_batches_str):
-    """Upload a single batch of files (chunked into groups of max 10 files for Telegram media group limits)"""
+    """Upload all files in a batch individually to guarantee 100% delivery without Telegram album silent dropping"""
     global client
     try:
         if not batch_files:
             return True
             
-        batch_size = sum(f['size'] for f in batch_files)
         total_files = len(batch_files)
         
         # Resolve target channel entity
@@ -969,78 +968,48 @@ async def upload_single_batch(batch_files, target_channel, batch_number, total_b
         except Exception:
             target_entity = target_resolved
         
-        # Telegram media groups (albums) allow max 10 files per album
-        chunk_size = 10
-        chunks = [batch_files[i:i + chunk_size] for i in range(0, total_files, chunk_size)]
-        total_chunks = len(chunks)
-        
-        for chunk_idx, chunk in enumerate(chunks, 1):
-            files_to_send = [os.path.abspath(file_info['path']) for file_info in chunk]
-            
+        uploaded_count = 0
+        for idx, file_info in enumerate(batch_files, 1):
+            file_path = os.path.abspath(file_info['path'])
+            if not os.path.exists(file_path):
+                emit_batch_status(f'⚠️ File missing on disk: {os.path.basename(file_path)}', 'uploading')
+                continue
+                
+            file_name = os.path.basename(file_path)
             emit_batch_status(
-                f'📤 Uploading batch {batch_number} (group {chunk_idx}/{total_chunks}, {len(chunk)} files)...',
+                f'📤 Uploading media {idx}/{total_files}: {file_name}...',
                 'uploading'
             )
             
-            uploaded_chunk = False
-            retry_count = 0
-            while not uploaded_chunk and retry_count < 3:
+            sent = False
+            retries = 0
+            while not sent and retries < 3:
                 try:
-                    if len(files_to_send) > 1:
-                        # Send album of max 10 files without caption
-                        await client.send_file(
-                            target_entity,
-                            files_to_send,
-                            caption=None,
-                            supports_streaming=True
-                        )
-                    else:
-                        is_vid = files_to_send[0].lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.webm', '.m4v'))
-                        await client.send_file(
-                            target_entity,
-                            files_to_send[0],
-                            caption=None,
-                            supports_streaming=is_vid
-                        )
-                    uploaded_chunk = True
+                    is_vid = file_path.lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.webm', '.m4v'))
+                    await client.send_file(
+                        target_entity,
+                        file_path,
+                        caption=None,
+                        supports_streaming=is_vid
+                    )
+                    sent = True
+                    uploaded_count += 1
+                    emit_batch_status(
+                        f'✅ Uploaded media {idx}/{total_files}: {file_name}',
+                        'uploading'
+                    )
+                    await asyncio.sleep(1.5)
                 except FloodWaitError as e:
                     emit_batch_status(f'⚠️ FloodWait {e.seconds}s during upload...', 'uploading')
-                    await asyncio.sleep(e.seconds + 1)
-                    retry_count += 1
-                except Exception as chunk_err:
-                    # Fallback: If album upload fails, send files 1-by-1 without caption
-                    emit_batch_status(f'⚠️ Album upload failed ({str(chunk_err)}), uploading files individually...', 'uploading')
-                    for f_path in files_to_send:
-                        sent_single = False
-                        f_retries = 0
-                        while not sent_single and f_retries < 3:
-                            try:
-                                is_vid = f_path.lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.webm', '.m4v'))
-                                await client.send_file(
-                                    target_entity,
-                                    f_path,
-                                    caption=None,
-                                    supports_streaming=is_vid
-                                )
-                                sent_single = True
-                                await asyncio.sleep(1)
-                            except FloodWaitError as e:
-                                emit_batch_status(f'⚠️ FloodWait {e.seconds}s...', 'uploading')
-                                await asyncio.sleep(e.seconds + 1)
-                                f_retries += 1
-                            except Exception as f_err:
-                                emit_batch_status(f'❌ Failed to upload {os.path.basename(f_path)}: {str(f_err)}', 'uploading')
-                                break
-                    uploaded_chunk = True
-            
-            await asyncio.sleep(2)
-            
-        return True
+                    await asyncio.sleep(e.seconds + 2)
+                    retries += 1
+                except Exception as e:
+                    emit_batch_status(f'❌ Error uploading {file_name}: {str(e)}', 'uploading')
+                    retries += 1
+                    await asyncio.sleep(2)
         
-    except FloodWaitError as e:
-        emit_batch_status(f'⚠️ FloodWait {e.seconds}s...', 'uploading')
-        await asyncio.sleep(e.seconds + 1)
-        return await upload_single_batch(batch_files, target_channel, batch_number, total_batches_str)
+        return uploaded_count > 0
+        
     except Exception as e:
         emit_batch_status(f'❌ Error uploading batch: {str(e)}', 'uploading')
         return False

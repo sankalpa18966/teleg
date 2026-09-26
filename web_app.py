@@ -800,7 +800,7 @@ def format_size_mb(bytes_size):
 
 
 async def batch_download_and_upload(base_link, start_id, end_id, target_channel, max_batch_gb=6, delete_after=True):
-    """Download range of messages and upload as batches with disk space management"""
+    """Download range of messages and upload each media file one-by-one without albums or captions"""
     global client, batch_status
     
     try:
@@ -811,12 +811,13 @@ async def batch_download_and_upload(base_link, start_id, end_id, target_channel,
         total_messages = end_id - start_id + 1
         batch_status['total_items'] = total_messages
         batch_status['downloaded_count'] = 0
+        batch_status['current_batch'] = 0
+        batch_status['batch_count'] = total_messages
         batch_status['total_size_mb'] = 0
         total_downloaded_bytes = 0
+        uploaded_count = 0
         
-        emit_batch_status(f'📥 Starting progressive download (max {max_batch_gb}GB per batch)...', 'downloading', 0, total_messages)
-        
-        max_batch_bytes = max_batch_gb * 1024 * 1024 * 1024
+        emit_batch_status(f'📥 Starting download & upload range ({start_id} to {end_id})...', 'downloading', 0, total_messages)
         
         # Resolve target channel
         def _resolve(ch):
@@ -825,29 +826,22 @@ async def batch_download_and_upload(base_link, start_id, end_id, target_channel,
             return ch
         
         target = _resolve(target_channel)
+        try:
+            target_entity = await client.get_entity(target)
+        except Exception:
+            target_entity = target
         
-        # Progressive batch processing
-        current_batch_files = []
-        current_batch_size = 0
-        batch_number = 0
-        total_uploaded_batches = 0
-        
-        # Download and process in chunks
+        # Process message by message in the range
         for msg_id in range(start_id, end_id + 1):
             if not batch_status['is_running']:
-                # Upload any remaining files before stopping
-                if current_batch_files:
-                    batch_number += 1
-                    batch_status['current_batch'] = batch_number
-                    await upload_single_batch(current_batch_files, target, batch_number, '?')
-                    if delete_after:
-                        cleanup_files(current_batch_files)
                 emit_batch_status('⏸️ Process stopped by user', 'idle')
                 break
             
             current_idx = msg_id - start_id + 1
+            batch_status['current_batch'] = current_idx
+            
             emit_batch_status(
-                f'📥 Downloading message {msg_id}... (Batch size: {format_size_mb(current_batch_size)} MB / {max_batch_gb * 1024} MB)',
+                f'📥 Fetching message {msg_id}/{end_id}...',
                 'downloading', current_idx, total_messages
             )
             
@@ -858,89 +852,65 @@ async def batch_download_and_upload(base_link, start_id, end_id, target_channel,
                     file_path = await client.download_media(message, DOWNLOAD_DIR)
                     
                     if file_path and os.path.exists(file_path):
-                        file_size = os.path.getsize(file_path)
+                        abs_file_path = os.path.abspath(file_path)
+                        file_size = os.path.getsize(abs_file_path)
+                        file_name = os.path.basename(abs_file_path)
+                        
                         total_downloaded_bytes += file_size
-                        batch_status['total_size_mb'] = format_size_mb(total_downloaded_bytes)
-                        
-                        # Check if adding this file exceeds batch limit
-                        if current_batch_size + file_size > max_batch_bytes and current_batch_files:
-                            # Upload current batch before continuing
-                            batch_number += 1
-                            batch_status['current_batch'] = batch_number
-                            
-                            emit_batch_status(
-                                f'💾 Batch {batch_number} full ({format_size_mb(current_batch_size)} MB) - uploading now...',
-                                'uploading', current_idx, total_messages
-                            )
-                            
-                            success = await upload_single_batch(current_batch_files, target, batch_number, '?')
-                            
-                            if success:
-                                total_uploaded_batches += 1
-                                emit_batch_status(f'✅ Batch {batch_number} uploaded!', 'uploading')
-                                
-                                # Cleanup uploaded files to free disk space
-                                if delete_after:
-                                    cleanup_files(current_batch_files)
-                                    emit_batch_status(f'🗑️ Cleaned batch {batch_number} files to free disk space', 'downloading')
-                            
-                            # Reset for next batch
-                            current_batch_files = []
-                            current_batch_size = 0
-                            
-                            # Small delay between batches
-                            await asyncio.sleep(3)
-                        
-                        # Add file to current batch
-                        current_batch_files.append({
-                            'path': file_path,
-                            'size': file_size,
-                            'caption': message.message if message.message else None,
-                            'msg_id': msg_id
-                        })
-                        current_batch_size += file_size
                         batch_status['downloaded_count'] += 1
                         batch_status['total_size_mb'] = format_size_mb(total_downloaded_bytes)
                         
                         emit_batch_status(
-                            f'✅ Downloaded {os.path.basename(file_path)} ({format_size_mb(file_size)} MB)',
-                            'downloading', current_idx, total_messages
+                            f'📤 Uploading #{msg_id}: {file_name} ({format_size_mb(file_size)} MB)...',
+                            'uploading', current_idx, total_messages
                         )
+                        
+                        # Upload file one-by-one without caption
+                        sent = False
+                        retries = 0
+                        while not sent and retries < 3 and batch_status['is_running']:
+                            try:
+                                is_vid = abs_file_path.lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.webm', '.m4v'))
+                                await client.send_file(
+                                    target_entity,
+                                    abs_file_path,
+                                    caption=None,
+                                    supports_streaming=is_vid
+                                )
+                                sent = True
+                                uploaded_count += 1
+                                emit_batch_status(
+                                    f'✅ Uploaded #{msg_id}: {file_name}',
+                                    'uploading', current_idx, total_messages
+                                )
+                            except FloodWaitError as e:
+                                emit_batch_status(f'⚠️ FloodWait {e.seconds}s during upload...', 'uploading', current_idx, total_messages)
+                                await asyncio.sleep(e.seconds + 2)
+                                retries += 1
+                            except Exception as up_err:
+                                emit_batch_status(f'❌ Upload error #{msg_id}: {str(up_err)}', 'uploading', current_idx, total_messages)
+                                retries += 1
+                                await asyncio.sleep(2)
+                        
+                        # Cleanup downloaded file to save disk space
+                        if delete_after and os.path.exists(abs_file_path):
+                            try:
+                                os.remove(abs_file_path)
+                            except Exception:
+                                pass
                     else:
-                        emit_batch_status(f'⚠️ No media in message {msg_id}', 'downloading', current_idx, total_messages)
+                        emit_batch_status(f'⚠️ No media downloaded for #{msg_id}', 'downloading', current_idx, total_messages)
                 else:
-                    emit_batch_status(f'⏭️ Skipping message {msg_id} (no media)', 'downloading', current_idx, total_messages)
+                    emit_batch_status(f'⏭️ Skipping #{msg_id} (no media)', 'downloading', current_idx, total_messages)
                 
                 await asyncio.sleep(1)
                 
             except Exception as e:
-                emit_batch_status(f'❌ Error downloading {msg_id}: {str(e)}', 'downloading', current_idx, total_messages)
+                emit_batch_status(f'❌ Error processing #{msg_id}: {str(e)}', 'downloading', current_idx, total_messages)
         
-        # Upload any remaining files
-        if current_batch_files and batch_status['is_running']:
-            batch_number += 1
-            batch_status['current_batch'] = batch_number
-            batch_status['batch_count'] = batch_number
-            
-            emit_batch_status(
-                f'📤 Uploading final batch {batch_number} ({len(current_batch_files)} files, {format_size_mb(current_batch_size)} MB)...',
-                'uploading', total_messages, total_messages
-            )
-            
-            success = await upload_single_batch(current_batch_files, target, batch_number, str(batch_number))
-            
-            if success:
-                total_uploaded_batches += 1
-                emit_batch_status(f'✅ Final batch uploaded!', 'uploading')
-                
-                if delete_after:
-                    cleanup_files(current_batch_files)
-        
-        batch_status['batch_count'] = batch_number
         batch_status['is_running'] = False
-        
         emit_batch_status(
-            f'✅ Process complete! Downloaded & uploaded {total_uploaded_batches} batch(es)',
+            f'✅ Process complete! Downloaded & uploaded {uploaded_count} media file(s)',
             'complete'
         )
         

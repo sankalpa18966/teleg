@@ -1095,11 +1095,99 @@ def cleanup_files(file_list):
             pass
 
 
-def run_batch_process(base_link, start_id, end_id, target_channel, max_batch_gb, delete_after):
-    """Thread wrapper for batch process"""
+async def batch_direct_forward(base_link, start_id, end_id, target_channel):
+    """Directly forward messages in a range using Telegram relay - no download, no re-upload."""
+    global client, batch_status
+
+    try:
+        peer = parse_telegram_base_link(base_link)
+        entity = await client.get_entity(peer)
+
+        def _resolve(ch):
+            if isinstance(ch, str) and ch.lstrip('-').isdigit():
+                return int(ch)
+            return ch
+
+        target = _resolve(target_channel)
+        try:
+            target_entity = await client.get_entity(target)
+        except Exception:
+            target_entity = target
+
+        total_messages = end_id - start_id + 1
+        batch_status['total_items'] = total_messages
+        batch_status['downloaded_count'] = 0
+        batch_status['current_batch'] = 0
+        batch_status['batch_count'] = 0
+        batch_status['total_size_mb'] = 0
+
+        emit_batch_status(
+            f'🚀 Direct Forward Mode: Forwarding messages {start_id} → {end_id}...',
+            'forwarding', 0, total_messages
+        )
+
+        forwarded = 0
+        failed = 0
+
+        for msg_id in range(start_id, end_id + 1):
+            if not batch_status['is_running']:
+                emit_batch_status('⏸️ Process stopped by user', 'idle')
+                return
+
+            current_idx = msg_id - start_id + 1
+            batch_status['current_batch'] = current_idx
+
+            emit_batch_status(
+                f'🚀 Forwarding message {msg_id}/{end_id}...',
+                'forwarding', current_idx, total_messages
+            )
+
+            retries = 0
+            success = False
+            while not success and retries < 3 and batch_status['is_running']:
+                try:
+                    message = await client.get_messages(entity, ids=msg_id)
+                    if message:
+                        await client.forward_messages(target_entity, message)
+                        forwarded += 1
+                        batch_status['downloaded_count'] = forwarded
+                        emit_batch_status(
+                            f'✅ Forwarded #{msg_id} ({current_idx}/{total_messages})',
+                            'forwarding', current_idx, total_messages
+                        )
+                        success = True
+                        await asyncio.sleep(0.5)
+                    else:
+                        emit_batch_status(f'⏭️ Skipping #{msg_id} (not found)', 'forwarding', current_idx, total_messages)
+                        success = True
+                except FloodWaitError as e:
+                    emit_batch_status(f'⚠️ FloodWait {e.seconds}s...', 'forwarding', current_idx, total_messages)
+                    await asyncio.sleep(e.seconds + 1)
+                    retries += 1
+                except Exception as e:
+                    emit_batch_status(f'❌ Error forwarding #{msg_id}: {str(e)}', 'forwarding', current_idx, total_messages)
+                    failed += 1
+                    success = True  # move on
+
+        batch_status['is_running'] = False
+        emit_batch_status(
+            f'✅ Direct Forward complete! Forwarded {forwarded} messages, {failed} failed.',
+            'complete'
+        )
+
+    except Exception as e:
+        batch_status['is_running'] = False
+        emit_batch_status(f'❌ Error: {str(e)}', 'complete')
+
+
+def run_batch_process(base_link, start_id, end_id, target_channel, batch_mode, max_batch_gb, delete_after):
+    """Thread wrapper for batch process - routes to forward or download+upload based on mode."""
     try:
         ensure_client()
-        run_async(batch_download_and_upload(base_link, start_id, end_id, target_channel, max_batch_gb, delete_after))
+        if batch_mode == 'direct_forward':
+            run_async(batch_direct_forward(base_link, start_id, end_id, target_channel))
+        else:
+            run_async(batch_download_and_upload(base_link, start_id, end_id, target_channel, max_batch_gb, delete_after))
     except Exception as e:
         batch_status['is_running'] = False
         emit_batch_status(f'❌ Error: {str(e)}', 'complete')
@@ -1121,6 +1209,7 @@ def start_batch_download():
     start_id = data.get('start_id')
     end_id = data.get('end_id')
     target_channel = data.get('target_channel', '').strip()
+    batch_mode = data.get('batch_mode', 'download_upload')  # 'download_upload' or 'direct_forward'
     max_batch_gb = data.get('max_batch_gb', 6)
     delete_after = data.get('delete_after', True)
     
@@ -1152,7 +1241,7 @@ def start_batch_download():
     # Start in background thread
     t = threading.Thread(
         target=run_batch_process,
-        args=(base_link, start_id, end_id, target_channel, max_batch_gb, delete_after),
+        args=(base_link, start_id, end_id, target_channel, batch_mode, max_batch_gb, delete_after),
         daemon=True
     )
     t.start()

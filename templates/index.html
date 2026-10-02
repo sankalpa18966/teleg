@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -633,11 +633,11 @@
                 <div style="display: flex; gap: 20px; margin-top: 5px;">
                     <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; color: var(--text-main);">
                         <input type="radio" name="downloaderAction" value="download" checked onchange="toggleDownloaderAction()" style="width: auto;">
-                        <span>📥 Download to My Device</span>
+                        <span>ðŸ“¥ Download to My Device</span>
                     </label>
                     <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; color: var(--text-main);">
                         <input type="radio" name="downloaderAction" value="send_channel" onchange="toggleDownloaderAction()" style="width: auto;">
-                        <span>🚀 Send / Forward to Channel</span>
+                        <span>ðŸš€ Send / Forward to Channel</span>
                     </label>
                 </div>
             </div>
@@ -692,15 +692,36 @@
         <!-- TAB 5: BATCH DOWNLOADER -->
         <div id="batchTab" class="tab-content">
             <p style="font-size: 14px; color: var(--text-muted); margin-bottom: 20px;">
-                📦 Download multiple messages by range and upload as batches (max 6GB per batch)
+                ðŸ“¦ Download multiple messages by range and upload as batches, or directly forward without downloading.
             </p>
+
+            <!-- Batch Mode Selector -->
+            <div class="form-group" style="margin-bottom: 18px;">
+                <label style="font-size: 13px; font-weight: 600; color: var(--text-muted); margin-bottom: 10px; display: block;">âš™ï¸ Batch Mode</label>
+                <div style="display: flex; gap: 12px; flex-wrap: wrap;">
+                    <label style="flex: 1; min-width: 200px; display: flex; align-items: flex-start; gap: 10px; cursor: pointer; background: rgba(56,189,248,0.07); border: 1.5px solid rgba(56,189,248,0.18); border-radius: 12px; padding: 12px 16px; transition: border-color 0.2s;" id="batchModeDownloadLabel">
+                        <input type="radio" name="batchMode" value="download_upload" checked onchange="toggleBatchMode()" style="width: auto; margin-top: 2px;">
+                        <span>
+                            <strong style="color: var(--primary);">ðŸ“¥ Download &amp; Upload</strong><br>
+                            <small style="color: var(--text-muted);">Downloads to VPS then re-uploads. Removes forward badge. Supports captions.</small>
+                        </span>
+                    </label>
+                    <label style="flex: 1; min-width: 200px; display: flex; align-items: flex-start; gap: 10px; cursor: pointer; background: rgba(139,92,246,0.07); border: 1.5px solid rgba(139,92,246,0.18); border-radius: 12px; padding: 12px 16px; transition: border-color 0.2s;" id="batchModeForwardLabel">
+                        <input type="radio" name="batchMode" value="direct_forward" onchange="toggleBatchMode()" style="width: auto; margin-top: 2px;">
+                        <span>
+                            <strong style="color: var(--accent);">ðŸš€ Direct Forward</strong><br>
+                            <small style="color: var(--text-muted);">Instantly forwards messages via Telegram relay. Fast, no disk usage. Keeps forward badge.</small>
+                        </span>
+                    </label>
+                </div>
+            </div>
 
             <div class="form-grid">
                 <div class="form-group full-width">
                     <label for="batchBaseLink">Base Link (Channel URL without message ID)</label>
                     <input type="text" id="batchBaseLink" placeholder="https://t.me/c/3916408757/ or https://t.me/channelname/">
                     <small style="font-size: 11px; color: var(--text-muted); margin-top: 4px; display: block;">
-                        💡 Private: https://t.me/c/CHANNEL_ID/ | Public: https://t.me/channelname/
+                        ðŸ’¡ Private: https://t.me/c/CHANNEL_ID/ | Public: https://t.me/channelname/
                     </small>
                 </div>
                 <div class="form-group">
@@ -715,16 +736,16 @@
                     <label for="batchTargetChannel">Target Channel ID / Username</label>
                     <input type="text" id="batchTargetChannel" placeholder="e.g. -1004460843642 or @target">
                 </div>
-                <div class="form-group">
+                <div class="form-group" id="batchMaxSizeGroup">
                     <label for="batchMaxSize">Max Batch Size (GB)</label>
                     <input type="number" id="batchMaxSize" placeholder="6" min="1" max="10" value="6">
                 </div>
             </div>
 
-            <div class="form-group">
+            <div class="form-group" id="batchDeleteGroup">
                 <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; color: var(--text-main);">
                     <input type="checkbox" id="batchDeleteAfter" checked style="width: auto;">
-                    <span>🗑️ Delete downloaded files after upload (recommended to save disk space)</span>
+                    <span>ðŸ—‘ï¸ Delete downloaded files after upload (recommended to save disk space)</span>
                 </label>
             </div>
 
@@ -749,7 +770,7 @@
                     </div>
                     <div class="stat-card">
                         <div class="stat-val" id="batchDownloaded" style="color: var(--success);">0</div>
-                        <div class="stat-lbl">Downloaded</div>
+                        <div class="stat-lbl" id="batchDownloadedLbl">Processed</div>
                     </div>
                     <div class="stat-card">
                         <div class="stat-val" id="batchBatches" style="color: var(--accent);">0 / 0</div>
@@ -758,14 +779,14 @@
                 </div>
 
                 <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid var(--card-border); display: flex; justify-content: space-between; font-size: 12px; color: var(--text-muted);">
-                    <span>📦 Total Size: <strong id="batchTotalSize" style="color: var(--primary);">0 MB</strong></span>
-                    <span>⚙️ Max per batch: <strong style="color: var(--primary);">6 GB</strong></span>
+                    <span>ðŸ“¦ Total Size: <strong id="batchTotalSize" style="color: var(--primary);">0 MB</strong></span>
+                    <span>âš™ï¸ Max per batch: <strong style="color: var(--primary);">6 GB</strong></span>
                 </div>
             </div>
 
             <div style="display: flex; gap: 10px;">
                 <button id="startBatchBtn" onclick="startBatchProcess()" class="btn btn-success">
-                    <i class="fa-solid fa-play"></i> Start Batch Download & Upload
+                    <i class="fa-solid fa-play"></i> <span id="startBatchBtnText">Start Batch Download &amp; Upload</span>
                 </button>
                 <button id="stopBatchBtn" onclick="stopBatchProcess()" class="btn btn-danger" style="display: none;">
                     <i class="fa-solid fa-stop"></i> Stop Process
@@ -1202,7 +1223,33 @@
             }
         }
 
-        // ── Batch Downloader Functions ─────────────────────────────────────────
+        // â”€â”€ Batch Downloader Functions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+        function toggleBatchMode() {
+            const mode = document.querySelector('input[name="batchMode"]:checked').value;
+            const isForward = mode === 'direct_forward';
+
+            // Show/hide download-only options
+            document.getElementById('batchMaxSizeGroup').style.display = isForward ? 'none' : '';
+            document.getElementById('batchDeleteGroup').style.display = isForward ? 'none' : '';
+
+            // Update button text
+            document.getElementById('startBatchBtnText').textContent = isForward
+                ? 'Start Batch Forward'
+                : 'Start Batch Download & Upload';
+
+            // Update stat label
+            document.getElementById('batchDownloadedLbl').textContent = isForward ? 'Forwarded' : 'Downloaded';
+
+            // Highlight selected mode card
+            document.getElementById('batchModeDownloadLabel').style.borderColor = isForward
+                ? 'rgba(56,189,248,0.18)' : 'rgba(56,189,248,0.6)';
+            document.getElementById('batchModeForwardLabel').style.borderColor = isForward
+                ? 'rgba(139,92,246,0.6)' : 'rgba(139,92,246,0.18)';
+        }
+
+        // Run once on load to set correct highlight
+        toggleBatchMode();
 
         function updateBatchUI(data) {
             document.getElementById('batchMessage').textContent = data.message;
@@ -1251,8 +1298,10 @@
             const startId = parseInt(document.getElementById('batchStartId').value);
             const endId = parseInt(document.getElementById('batchEndId').value);
             const targetChannel = document.getElementById('batchTargetChannel').value.trim();
+            const batchMode = document.querySelector('input[name="batchMode"]:checked').value;
             const maxBatchGb = parseInt(document.getElementById('batchMaxSize').value) || 6;
             const deleteAfter = document.getElementById('batchDeleteAfter').checked;
+            const isForward = batchMode === 'direct_forward';
 
             // Validation
             if (!baseLink) {
@@ -1276,6 +1325,11 @@
             btn.disabled = true;
             btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Starting...';
 
+            const restoreBtn = () => {
+                btn.disabled = false;
+                btn.innerHTML = `<i class="fa-solid fa-play"></i> <span id="startBatchBtnText">${isForward ? 'Start Batch Forward' : 'Start Batch Download &amp; Upload'}</span>`;
+            };
+
             try {
                 const res = await fetch('/api/batch/start', {
                     method: 'POST',
@@ -1285,6 +1339,7 @@
                         start_id: startId,
                         end_id: endId,
                         target_channel: targetChannel,
+                        batch_mode: batchMode,
                         max_batch_gb: maxBatchGb,
                         delete_after: deleteAfter
                     })
@@ -1296,13 +1351,11 @@
                     showToast(data.message, 'success');
                 } else {
                     showToast(data.message, 'error');
-                    btn.disabled = false;
-                    btn.innerHTML = '<i class="fa-solid fa-play"></i> Start Batch Download & Upload';
+                    restoreBtn();
                 }
             } catch (err) {
                 showToast('Error: ' + err.message, 'error');
-                btn.disabled = false;
-                btn.innerHTML = '<i class="fa-solid fa-play"></i> Start Batch Download & Upload';
+                restoreBtn();
             }
         }
 

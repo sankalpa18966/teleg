@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -1289,7 +1289,10 @@
                 stopBtn.style.display = 'inline-flex';
             } else {
                 startBtn.style.display = 'inline-flex';
+                startBtn.disabled = false;
                 stopBtn.style.display = 'none';
+                // Restore button text to match current selected mode
+                toggleBatchMode();
             }
         }
 

@@ -10,6 +10,9 @@ import asyncio
 import os
 import json
 from datetime import datetime
+import subprocess
+import shutil
+import random
 
 # API credentials - You need to get these from https://my.telegram.org/apps
 API_ID = os.getenv('API_ID', '33864150')
@@ -114,21 +117,65 @@ class TelegramMediaTransfer:
             print(f"❌ Error downloading media: {e}")
             return None
     
-    async def send_media(self, channel, file_path, caption=None, supports_streaming=True):
-        """Send media to a channel with streaming support for videos"""
+    async def get_or_generate_thumbnail(self, message, file_path, output_dir=DOWNLOAD_DIR):
+        """Extract original thumbnail or generate crisp frame via ffmpeg"""
+        thumb_path = None
+        try:
+            if message:
+                has_thumb = False
+                if hasattr(message, 'document') and message.document and hasattr(message.document, 'thumbs') and message.document.thumbs:
+                    has_thumb = True
+                elif hasattr(message, 'video') and message.video and hasattr(message.video, 'thumbs') and message.video.thumbs:
+                    has_thumb = True
+
+                if has_thumb:
+                    rnd_id = random.randint(1000, 9999)
+                    target_thumb = os.path.join(output_dir, f'thumb_{message.id}_{rnd_id}.jpg')
+                    downloaded = await self.client.download_media(message, file=target_thumb, thumb=-1)
+                    if downloaded and os.path.exists(downloaded) and os.path.getsize(downloaded) > 100:
+                        thumb_path = os.path.abspath(downloaded)
+        except Exception as e:
+            print(f"Thumbnail download note: {e}")
+
+        if (not thumb_path or not os.path.exists(thumb_path) or os.path.getsize(thumb_path) < 100) and file_path:
+            is_video = file_path.lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.webm', '.m4v'))
+            if is_video and shutil.which('ffmpeg'):
+                rnd_id = random.randint(10000, 99999)
+                target_thumb = os.path.join(output_dir, f'ffmpeg_thumb_{rnd_id}.jpg')
+                try:
+                    cmd = [
+                        'ffmpeg', '-y', '-ss', '00:00:01', '-i', file_path,
+                        '-vframes', '1', '-vf', 'scale=320:-1', target_thumb
+                    ]
+                    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
+                    if not os.path.exists(target_thumb) or os.path.getsize(target_thumb) < 100:
+                        cmd[2] = '00:00:00'
+                        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
+
+                    if os.path.exists(target_thumb) and os.path.getsize(target_thumb) > 100:
+                        thumb_path = os.path.abspath(target_thumb)
+                except Exception as fe:
+                    print(f"FFmpeg thumbnail note: {fe}")
+
+        return thumb_path
+
+    async def send_media(self, channel, file_path, caption=None, supports_streaming=True, thumb=None):
+        """Send media to a channel with streaming support and custom thumbnail for videos"""
         max_retries = 3
         retry_count = 0
         
         # Check if it's a video file
         is_video = file_path.lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.webm', '.m4v'))
-        
+        valid_thumb = thumb if (thumb and os.path.exists(thumb)) else None
+
         while retry_count < max_retries:
             try:
-                # Send with streaming support for videos
+                # Send with streaming and thumbnail support for videos
                 await self.client.send_file(
                     channel,
                     file_path,
                     caption=caption,
+                    thumb=valid_thumb,
                     supports_streaming=supports_streaming if is_video else False,
                     force_document=False  # Send videos as video, not document
                 )
@@ -182,11 +229,12 @@ class TelegramMediaTransfer:
             if file_path:
                 print(f"✅ Downloaded: {os.path.basename(file_path)}")
                 
-                # Get caption
+                # Get caption and thumbnail
                 caption = message.message if keep_caption else None
+                thumb_path = await self.get_or_generate_thumbnail(message, file_path)
                 
                 # Upload to target channel
-                if await self.send_media(target, file_path, caption):
+                if await self.send_media(target, file_path, caption=caption, thumb=thumb_path):
                     print(f"✅ Uploaded to {target}")
                     success_count += 1
                     
@@ -194,15 +242,25 @@ class TelegramMediaTransfer:
                     self.mark_as_transferred(source, message.id)
                     print(f"✅ Marked message {message.id} as transferred")
                     
-                    # Delete downloaded file if requested
+                    # Delete downloaded file and thumbnail if requested
                     if delete_after_upload:
                         try:
                             os.remove(file_path)
                             print(f"🗑️ Deleted local file")
                         except:
                             pass
+                        if thumb_path and os.path.exists(thumb_path):
+                            try:
+                                os.remove(thumb_path)
+                            except:
+                                pass
                 else:
                     fail_count += 1
+                    if thumb_path and os.path.exists(thumb_path):
+                        try:
+                            os.remove(thumb_path)
+                        except:
+                            pass
                     
                 # Delay to avoid rate limits
                 await asyncio.sleep(delay)

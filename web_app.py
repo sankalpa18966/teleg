@@ -19,6 +19,8 @@ import io
 import mimetypes
 from datetime import datetime
 import threading
+import subprocess
+import shutil
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'telegram-transfer-secret-key-2024'
@@ -231,6 +233,60 @@ def emit_status(message, current=None, total=None):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+#  Thumbnail Extraction & Generation Helper
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def get_or_generate_thumbnail(client, message, file_path, output_dir):
+    """
+    1. Download highest-quality original thumbnail from Telegram message if available.
+    2. Fallback: For video files, use ffmpeg to capture a crisp frame at 1s (avoids black screen).
+    Returns absolute path to the thumbnail JPG file or None.
+    """
+    thumb_path = None
+    try:
+        if message:
+            has_thumb = False
+            if hasattr(message, 'document') and message.document and hasattr(message.document, 'thumbs') and message.document.thumbs:
+                has_thumb = True
+            elif hasattr(message, 'video') and message.video and hasattr(message.video, 'thumbs') and message.video.thumbs:
+                has_thumb = True
+
+            if has_thumb:
+                rnd_id = random.randint(1000, 9999)
+                target_thumb = os.path.join(output_dir, f'thumb_{message.id}_{rnd_id}.jpg')
+                downloaded = await client.download_media(message, file=target_thumb, thumb=-1)
+                if downloaded and os.path.exists(downloaded) and os.path.getsize(downloaded) > 100:
+                    thumb_path = os.path.abspath(downloaded)
+    except Exception as e:
+        print(f"Original thumbnail download note: {e}")
+
+    # Fallback to ffmpeg for videos if no thumbnail was retrieved
+    if (not thumb_path or not os.path.exists(thumb_path) or os.path.getsize(thumb_path) < 100) and file_path:
+        is_video = file_path.lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.webm', '.m4v'))
+        if is_video and shutil.which('ffmpeg'):
+            rnd_id = random.randint(10000, 99999)
+            target_thumb = os.path.join(output_dir, f'ffmpeg_thumb_{rnd_id}.jpg')
+            try:
+                # Seek 1s to capture a non-black frame
+                cmd = [
+                    'ffmpeg', '-y', '-ss', '00:00:01', '-i', file_path,
+                    '-vframes', '1', '-vf', 'scale=320:-1', target_thumb
+                ]
+                subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
+                if not os.path.exists(target_thumb) or os.path.getsize(target_thumb) < 100:
+                    # If 1s failed, try 0s
+                    cmd[2] = '00:00:00'
+                    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
+
+                if os.path.exists(target_thumb) and os.path.getsize(target_thumb) > 100:
+                    thumb_path = os.path.abspath(target_thumb)
+            except Exception as fe:
+                print(f"FFmpeg thumbnail extraction note: {fe}")
+
+    return thumb_path
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 #  Transfer async core
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -246,68 +302,213 @@ async def transfer_media_async(source_channel, target_channel):
         src = _resolve(source_channel)
         tgt = _resolve(target_channel)
 
-        emit_status('📥 Fetching messages...')
+        emit_status('📥 Fetching messages from channel...')
         messages = []
         async for message in client.iter_messages(src, limit=None):
             if message.media:
                 messages.append(message)
 
+        # Reverse so messages are processed chronologically (oldest to newest)
+        messages.reverse()
+
         total = len(messages)
         transfer_status['total'] = total
+        transfer_status['current'] = 0
+        transfer_status['success'] = 0
+        transfer_status['skipped'] = 0
+        transfer_status['failed'] = 0
         emit_status(f'📊 Found {total} media messages', 0, total)
 
         db = load_transferred_db()
-        already = sum(1 for m in messages if is_already_transferred(db, src, m.id))
-        if already:
-            emit_status(f'⏭️ {already} already transferred — will skip')
+
+        # Group consecutive messages sharing the same grouped_id into collections/albums (max 10 items)
+        grouped_items = []
+        current_album = []
+        current_gid = None
+
+        for msg in messages:
+            gid = msg.grouped_id
+            if gid:
+                if current_gid == gid and len(current_album) < 10:
+                    current_album.append(msg)
+                else:
+                    if current_album:
+                        grouped_items.append(current_album)
+                    current_album = [msg]
+                    current_gid = gid
+            else:
+                if current_album:
+                    grouped_items.append(current_album)
+                    current_album = []
+                    current_gid = None
+                grouped_items.append([msg])
+
+        if current_album:
+            grouped_items.append(current_album)
 
         success = failed = skipped = 0
+        processed = 0
 
-        for idx, message in enumerate(messages, 1):
+        for group in grouped_items:
             if not transfer_status['is_running']:
                 emit_status('⏸️ Transfer stopped by user')
                 break
 
-            if is_already_transferred(db, src, message.id):
-                skipped += 1
+            # Check if all messages in this group are already transferred
+            untransferred = [m for m in group if not is_already_transferred(db, src, m.id)]
+            if not untransferred:
+                skipped += len(group)
+                processed += len(group)
                 transfer_status['skipped'] = skipped
-                transfer_status['current'] = idx
-                emit_status(f'⏭️ Skipping #{message.id}', idx, total)
+                transfer_status['current'] = processed
+                emit_status(f'⏭️ Skipping already transferred (#{group[0].id}..)', processed, total)
                 continue
 
-            emit_status(f'📥 Downloading #{message.id}...', idx, total)
-            try:
-                file_path = await client.download_media(message, DOWNLOAD_DIR)
-                if file_path:
-                    emit_status(f'⬆️ Uploading {os.path.basename(file_path)}...', idx, total)
-                    caption = message.message if message.message else None
-                    is_video = file_path.lower().endswith(
-                        ('.mp4', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.webm', '.m4v'))
-                    await client.send_file(
-                        tgt, file_path,
-                        caption=caption,
-                        supports_streaming=is_video,
-                        force_document=False
-                    )
-                    emit_status(f'✅ Done #{message.id}', idx, total)
-                    success += 1
-                    transfer_status['success'] = success
-                    mark_as_transferred(db, src, message.id)
+            msgs_to_process = untransferred
+            is_album = len(msgs_to_process) > 1
+
+            if is_album:
+                emit_status(f'📥 Downloading Collection ({len(msgs_to_process)} files: #{msgs_to_process[0].id}..#{msgs_to_process[-1].id})...', processed, total)
+                downloaded_group = []
+                for m in msgs_to_process:
                     try:
-                        os.remove(file_path)
-                    except Exception:
-                        pass
-                    await asyncio.sleep(3)
+                        f_path = await client.download_media(m, DOWNLOAD_DIR)
+                        if f_path and os.path.exists(f_path):
+                            abs_p = os.path.abspath(f_path)
+                            thumb_p = await get_or_generate_thumbnail(client, m, abs_p, DOWNLOAD_DIR)
+                            downloaded_group.append({
+                                'path': abs_p,
+                                'thumb': thumb_p,
+                                'caption': m.message if m.message else None,
+                                'msg_id': m.id
+                            })
+                    except Exception as de:
+                        print(f"Download item error: {de}")
+
+                if downloaded_group:
+                    emit_status(f'⬆️ Uploading Collection ({len(downloaded_group)} files together as album)...', processed, total)
+                    paths = [item['path'] for item in downloaded_group]
+                    captions = [item['caption'] or '' for item in downloaded_group]
+                    
+                    sent = False
+                    retries = 0
+                    while not sent and retries < 3 and transfer_status['is_running']:
+                        try:
+                            if any(captions):
+                                try:
+                                    await client.send_file(tgt, paths, caption=captions, supports_streaming=True)
+                                except Exception:
+                                    await client.send_file(tgt, paths, supports_streaming=True)
+                            else:
+                                await client.send_file(tgt, paths, supports_streaming=True)
+
+                            for item in downloaded_group:
+                                mark_as_transferred(db, src, item['msg_id'])
+
+                            success += len(downloaded_group)
+                            processed += len(group)
+                            transfer_status['success'] = success
+                            transfer_status['current'] = processed
+                            emit_status(f'✅ Done Collection ({len(downloaded_group)} files)', processed, total)
+                            sent = True
+                            await asyncio.sleep(2)
+                        except FloodWaitError as e:
+                            emit_status(f'⚠️ FloodWait {e.seconds}s...', processed, total)
+                            await asyncio.sleep(e.seconds + 1)
+                            retries += 1
+                        except Exception as e:
+                            emit_status(f'❌ Error uploading album: {e}', processed, total)
+                            failed += len(downloaded_group)
+                            processed += len(group)
+                            transfer_status['failed'] = failed
+                            transfer_status['current'] = processed
+                            sent = True
+
+                    # Cleanup files and thumbs
+                    for item in downloaded_group:
+                        if os.path.exists(item['path']):
+                            try:
+                                os.remove(item['path'])
+                            except Exception:
+                                pass
+                        if item.get('thumb') and os.path.exists(item['thumb']):
+                            try:
+                                os.remove(item['thumb'])
+                            except Exception:
+                                pass
                 else:
-                    failed += 1
+                    failed += len(group)
+                    processed += len(group)
                     transfer_status['failed'] = failed
-            except FloodWaitError as e:
-                emit_status(f'⚠️ FloodWait {e.seconds}s...', idx, total)
-                await asyncio.sleep(e.seconds)
-            except Exception as e:
-                emit_status(f'❌ Error: {e}', idx, total)
-                failed += 1
-                transfer_status['failed'] = failed
+                    transfer_status['current'] = processed
+
+            else:
+                # Single message
+                msg = msgs_to_process[0]
+                emit_status(f'📥 Downloading #{msg.id}...', processed, total)
+                try:
+                    file_path = await client.download_media(msg, DOWNLOAD_DIR)
+                    if file_path and os.path.exists(file_path):
+                        abs_p = os.path.abspath(file_path)
+                        emit_status(f'⬆️ Uploading {os.path.basename(abs_p)}...', processed, total)
+                        caption = msg.message if msg.message else None
+                        is_video = abs_p.lower().endswith(
+                            ('.mp4', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.webm', '.m4v'))
+                        thumb_path = await get_or_generate_thumbnail(client, msg, abs_p, DOWNLOAD_DIR)
+                        valid_thumb = thumb_path if (thumb_path and os.path.exists(thumb_path)) else None
+
+                        sent = False
+                        retries = 0
+                        while not sent and retries < 3 and transfer_status['is_running']:
+                            try:
+                                await client.send_file(
+                                    tgt, abs_p,
+                                    caption=caption,
+                                    thumb=valid_thumb,
+                                    supports_streaming=is_video,
+                                    force_document=False
+                                )
+                                mark_as_transferred(db, src, msg.id)
+                                success += 1
+                                processed += 1
+                                transfer_status['success'] = success
+                                transfer_status['current'] = processed
+                                emit_status(f'✅ Done #{msg.id}', processed, total)
+                                sent = True
+                                await asyncio.sleep(2)
+                            except FloodWaitError as e:
+                                emit_status(f'⚠️ FloodWait {e.seconds}s...', processed, total)
+                                await asyncio.sleep(e.seconds + 1)
+                                retries += 1
+                            except Exception as e:
+                                emit_status(f'❌ Error: {e}', processed, total)
+                                failed += 1
+                                processed += 1
+                                transfer_status['failed'] = failed
+                                transfer_status['current'] = processed
+                                sent = True
+
+                        if os.path.exists(abs_p):
+                            try:
+                                os.remove(abs_p)
+                            except Exception:
+                                pass
+                        if thumb_path and os.path.exists(thumb_path):
+                            try:
+                                os.remove(thumb_path)
+                            except Exception:
+                                pass
+                    else:
+                        failed += 1
+                        processed += 1
+                        transfer_status['failed'] = failed
+                        transfer_status['current'] = processed
+                except Exception as e:
+                    emit_status(f'❌ Error downloading #{msg.id}: {e}', processed, total)
+                    failed += 1
+                    processed += 1
+                    transfer_status['failed'] = failed
+                    transfer_status['current'] = processed
 
         transfer_status['is_running'] = False
         emit_status(
@@ -654,6 +855,21 @@ def download_link():
                 message = await fetch_message_by_url(client, parsed)
 
                 if send_mode == 'forward':
+                    # Check if message is part of an album/collection
+                    if message.grouped_id:
+                        try:
+                            min_id = max(1, message.id - 10)
+                            max_id = message.id + 10
+                            nearby = await client.get_messages(parsed['peer'], min_id=min_id, max_id=max_id)
+                            album_msgs = [m for m in nearby if m and m.grouped_id == message.grouped_id]
+                            album_msgs.sort(key=lambda m: m.id)
+                            if len(album_msgs) > 1:
+                                emit_link_progress('Forwarding Album', 1, 1)
+                                await client.forward_messages(tgt, album_msgs)
+                                return f'Collection / Album ({len(album_msgs)} items) forwarded successfully!'
+                        except Exception as e:
+                            print(f"Could not forward as album: {e}")
+
                     emit_link_progress('Forwarding', 1, 1)
                     await client.forward_messages(tgt, message)
                     return 'Message forwarded successfully!'
@@ -668,6 +884,8 @@ def download_link():
                     if not file_path:
                         raise ValueError('Failed to download media')
 
+                    thumb_path = await get_or_generate_thumbnail(client, message, file_path, DOWNLOAD_DIR)
+
                     try:
                         caption = message.message if message.message else None
                         is_video = file_path.lower().endswith(
@@ -676,9 +894,11 @@ def download_link():
                         def upload_progress(c, t):
                             emit_link_progress('Uploading', c, t)
 
+                        valid_thumb = thumb_path if (thumb_path and os.path.exists(thumb_path)) else None
                         await client.send_file(
                             tgt, file_path,
                             caption=caption,
+                            thumb=valid_thumb,
                             supports_streaming=is_video,
                             force_document=False,
                             progress_callback=upload_progress
@@ -688,6 +908,11 @@ def download_link():
                             os.remove(file_path)
                         except Exception:
                             pass
+                        if thumb_path and os.path.exists(thumb_path):
+                            try:
+                                os.remove(thumb_path)
+                            except Exception:
+                                pass
                     return 'Media uploaded to target channel successfully!'
 
             res_msg = run_async(_send_to_channel())
@@ -859,15 +1084,20 @@ async def batch_download_and_upload(base_link, start_id, end_id, target_channel,
                         abs_file_path = os.path.abspath(file_path)
                         file_size = os.path.getsize(abs_file_path)
                         
+                        # Extract or download thumbnail for video/media
+                        thumb_path = await get_or_generate_thumbnail(client, message, abs_file_path, DOWNLOAD_DIR)
+
                         total_downloaded_bytes += file_size
                         batch_status['downloaded_count'] += 1
                         batch_status['total_size_mb'] = format_size_mb(total_downloaded_bytes)
                         
                         downloaded_files.append({
                             'path': abs_file_path,
+                            'thumb': thumb_path,
                             'size': file_size,
                             'caption': message.message if message.message else None,
-                            'msg_id': msg_id
+                            'msg_id': msg_id,
+                            'grouped_id': message.grouped_id
                         })
                         
                         emit_batch_status(
@@ -889,15 +1119,36 @@ async def batch_download_and_upload(base_link, start_id, end_id, target_channel,
             emit_batch_status('⚠️ No media files were downloaded in the specified range.', 'complete')
             return
 
-        # ── PHASE 2: GROUP INTO ALBUMS (MAX 10 MEDIA PER GROUP) & UPLOAD ──────
-        chunk_size = 10  # Telegram media group / album limit
-        chunks = [downloaded_files[i:i + chunk_size] for i in range(0, len(downloaded_files), chunk_size)]
+        # ── PHASE 2: GROUP INTO ALBUMS ACCORDING TO ORIGINAL GROUPED_ID & UPLOAD ──
+        chunks = []
+        current_album = []
+        current_gid = None
+
+        for item in downloaded_files:
+            gid = item.get('grouped_id')
+            if gid:
+                if current_gid == gid and len(current_album) < 10:
+                    current_album.append(item)
+                else:
+                    if current_album:
+                        chunks.append(current_album)
+                    current_album = [item]
+                    current_gid = gid
+            else:
+                if current_album:
+                    chunks.append(current_album)
+                    current_album = []
+                    current_gid = None
+                chunks.append([item])
+
+        if current_album:
+            chunks.append(current_album)
+
         total_chunks = len(chunks)
-        
         batch_status['batch_count'] = total_chunks
         
         emit_batch_status(
-            f'📦 Phase 2: Uploading {len(downloaded_files)} file(s) in {total_chunks} album group(s) (10 items max per album)...',
+            f'📦 Phase 2: Uploading {len(downloaded_files)} file(s) in {total_chunks} group(s) (collections preserved)...',
             'uploading', 0, total_chunks
         )
         
@@ -914,8 +1165,9 @@ async def batch_download_and_upload(base_link, start_id, end_id, target_channel,
             if not chunk_paths:
                 continue
                 
+            group_desc = f"Collection/Album ({len(chunk_paths)} files)" if len(chunk_paths) > 1 else f"#{chunk[0]['msg_id']}"
             emit_batch_status(
-                f'📤 Uploading Group {chunk_idx}/{total_chunks} ({len(chunk_paths)} files together as album)...',
+                f'📤 Uploading Group {chunk_idx}/{total_chunks}: {group_desc}...',
                 'uploading', chunk_idx, total_chunks
             )
             
@@ -924,19 +1176,31 @@ async def batch_download_and_upload(base_link, start_id, end_id, target_channel,
             while not sent and retries < 3 and batch_status['is_running']:
                 try:
                     if len(chunk_paths) > 1:
-                        # Upload set of files as Telegram Album / Media Group (max 10)
+                        # Upload collection as Telegram Album / Media Group (max 10)
                         if any(chunk_captions):
                             try:
-                                await client.send_file(target_entity, chunk_paths, caption=chunk_captions)
+                                await client.send_file(target_entity, chunk_paths, caption=chunk_captions, supports_streaming=True)
                             except Exception:
-                                await client.send_file(target_entity, chunk_paths)
+                                await client.send_file(target_entity, chunk_paths, supports_streaming=True)
                         else:
-                            await client.send_file(target_entity, chunk_paths)
+                            await client.send_file(target_entity, chunk_paths, supports_streaming=True)
                     else:
-                        # Single file
-                        is_vid = chunk_paths[0].lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.webm', '.m4v'))
-                        cap = chunk_captions[0] if chunk_captions[0] else None
-                        await client.send_file(target_entity, chunk_paths[0], caption=cap, supports_streaming=is_vid)
+                        # Single file with custom thumbnail and streaming enabled
+                        item = chunk[0]
+                        f_path = item['path']
+                        f_thumb = item.get('thumb')
+                        is_vid = f_path.lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.webm', '.m4v'))
+                        cap = item['caption'] if item['caption'] else None
+                        valid_thumb = f_thumb if (f_thumb and os.path.exists(f_thumb)) else None
+
+                        await client.send_file(
+                            target_entity,
+                            f_path,
+                            caption=cap,
+                            thumb=valid_thumb,
+                            supports_streaming=is_vid,
+                            force_document=False
+                        )
                     
                     sent = True
                     uploaded_media_count += len(chunk_paths)
@@ -957,11 +1221,15 @@ async def batch_download_and_upload(base_link, start_id, end_id, target_channel,
                         if os.path.exists(item['path']):
                             try:
                                 is_vid = item['path'].lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.webm', '.m4v'))
+                                f_thumb = item.get('thumb')
+                                valid_thumb = f_thumb if (f_thumb and os.path.exists(f_thumb)) else None
                                 await client.send_file(
                                     target_entity,
                                     item['path'],
                                     caption=item['caption'],
-                                    supports_streaming=is_vid
+                                    thumb=valid_thumb,
+                                    supports_streaming=is_vid,
+                                    force_document=False
                                 )
                                 uploaded_media_count += 1
                                 await asyncio.sleep(1.5)
@@ -975,6 +1243,12 @@ async def batch_download_and_upload(base_link, start_id, end_id, target_channel,
                     if os.path.exists(item['path']):
                         try:
                             os.remove(item['path'])
+                        except Exception:
+                            pass
+                    f_thumb = item.get('thumb')
+                    if f_thumb and os.path.exists(f_thumb):
+                        try:
+                            os.remove(f_thumb)
                         except Exception:
                             pass
         
@@ -1129,6 +1403,46 @@ async def batch_direct_forward(base_link, start_id, end_id, target_channel):
         forwarded = 0
         failed = 0
 
+        # We buffer consecutive messages that share the same grouped_id to forward together as an album/collection
+        current_group = []
+        current_grouped_id = None
+
+        async def forward_current_group():
+            nonlocal forwarded, failed, current_group, current_grouped_id
+            if not current_group:
+                return
+            retries = 0
+            success = False
+            group_to_send = list(current_group)
+            current_group = []
+            current_grouped_id = None
+
+            while not success and retries < 3 and batch_status['is_running']:
+                try:
+                    if len(group_to_send) == 1:
+                        await client.forward_messages(target_entity, group_to_send[0])
+                        item_label = f"#{group_to_send[0].id}"
+                    else:
+                        await client.forward_messages(target_entity, group_to_send)
+                        item_label = f"Collection/Album ({len(group_to_send)} items: #{group_to_send[0].id}..#{group_to_send[-1].id})"
+
+                    forwarded += len(group_to_send)
+                    batch_status['downloaded_count'] = forwarded
+                    emit_batch_status(
+                        f'✅ Forwarded {item_label}',
+                        'forwarding', current_idx, total_messages
+                    )
+                    success = True
+                    await asyncio.sleep(0.8)
+                except FloodWaitError as e:
+                    emit_batch_status(f'⚠️ FloodWait {e.seconds}s...', 'forwarding', current_idx, total_messages)
+                    await asyncio.sleep(e.seconds + 1)
+                    retries += 1
+                except Exception as e:
+                    emit_batch_status(f'❌ Error forwarding group: {str(e)}', 'forwarding', current_idx, total_messages)
+                    failed += len(group_to_send)
+                    success = True
+
         for msg_id in range(start_id, end_id + 1):
             if not batch_status['is_running']:
                 emit_batch_status('⏸️ Process stopped by user', 'idle')
@@ -1138,36 +1452,42 @@ async def batch_direct_forward(base_link, start_id, end_id, target_channel):
             batch_status['current_batch'] = current_idx
 
             emit_batch_status(
-                f'🚀 Forwarding message {msg_id}/{end_id}...',
+                f'🚀 Reading message {msg_id}/{end_id}...',
                 'forwarding', current_idx, total_messages
             )
 
-            retries = 0
-            success = False
-            while not success and retries < 3 and batch_status['is_running']:
-                try:
-                    message = await client.get_messages(entity, ids=msg_id)
-                    if message:
-                        await client.forward_messages(target_entity, message)
-                        forwarded += 1
-                        batch_status['downloaded_count'] = forwarded
-                        emit_batch_status(
-                            f'✅ Forwarded #{msg_id} ({current_idx}/{total_messages})',
-                            'forwarding', current_idx, total_messages
-                        )
-                        success = True
-                        await asyncio.sleep(0.5)
+            try:
+                message = await client.get_messages(entity, ids=msg_id)
+                if not message:
+                    emit_batch_status(f'⏭️ Skipping #{msg_id} (not found)', 'forwarding', current_idx, total_messages)
+                    continue
+
+                gid = message.grouped_id
+                if gid:
+                    if current_grouped_id == gid and len(current_group) < 10:
+                        current_group.append(message)
                     else:
-                        emit_batch_status(f'⏭️ Skipping #{msg_id} (not found)', 'forwarding', current_idx, total_messages)
-                        success = True
-                except FloodWaitError as e:
-                    emit_batch_status(f'⚠️ FloodWait {e.seconds}s...', 'forwarding', current_idx, total_messages)
-                    await asyncio.sleep(e.seconds + 1)
-                    retries += 1
-                except Exception as e:
-                    emit_batch_status(f'❌ Error forwarding #{msg_id}: {str(e)}', 'forwarding', current_idx, total_messages)
-                    failed += 1
-                    success = True  # move on
+                        if current_group:
+                            await forward_current_group()
+                        current_group = [message]
+                        current_grouped_id = gid
+                else:
+                    if current_group:
+                        await forward_current_group()
+                    current_group = [message]
+                    current_grouped_id = None
+                    await forward_current_group()
+
+            except FloodWaitError as e:
+                emit_batch_status(f'⚠️ FloodWait {e.seconds}s...', 'forwarding', current_idx, total_messages)
+                await asyncio.sleep(e.seconds + 1)
+            except Exception as e:
+                emit_batch_status(f'❌ Error on #{msg_id}: {str(e)}', 'forwarding', current_idx, total_messages)
+                failed += 1
+
+        # Flush any remaining album group
+        if current_group:
+            await forward_current_group()
 
         batch_status['is_running'] = False
         emit_batch_status(

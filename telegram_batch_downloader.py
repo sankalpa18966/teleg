@@ -9,8 +9,10 @@ from telethon.errors import FloodWaitError
 import asyncio
 import os
 import json
-from datetime import datetime
 import re
+import subprocess
+import shutil
+import random
 
 # API credentials
 API_ID = os.getenv('API_ID', '33864150')
@@ -68,6 +70,48 @@ class TelegramBatchDownloader:
         
         raise ValueError(f"Invalid Telegram link format: {link}")
     
+    async def get_or_generate_thumbnail(self, message, file_path, output_dir):
+        """Extract original thumbnail or generate crisp frame via ffmpeg"""
+        thumb_path = None
+        try:
+            if message:
+                has_thumb = False
+                if hasattr(message, 'document') and message.document and hasattr(message.document, 'thumbs') and message.document.thumbs:
+                    has_thumb = True
+                elif hasattr(message, 'video') and message.video and hasattr(message.video, 'thumbs') and message.video.thumbs:
+                    has_thumb = True
+
+                if has_thumb:
+                    rnd_id = random.randint(1000, 9999)
+                    target_thumb = os.path.join(output_dir, f'thumb_{message.id}_{rnd_id}.jpg')
+                    downloaded = await self.client.download_media(message, file=target_thumb, thumb=-1)
+                    if downloaded and os.path.exists(downloaded) and os.path.getsize(downloaded) > 100:
+                        thumb_path = os.path.abspath(downloaded)
+        except Exception as e:
+            print(f"Thumbnail download note: {e}")
+
+        if (not thumb_path or not os.path.exists(thumb_path) or os.path.getsize(thumb_path) < 100) and file_path:
+            is_video = file_path.lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.webm', '.m4v'))
+            if is_video and shutil.which('ffmpeg'):
+                rnd_id = random.randint(10000, 99999)
+                target_thumb = os.path.join(output_dir, f'ffmpeg_thumb_{rnd_id}.jpg')
+                try:
+                    cmd = [
+                        'ffmpeg', '-y', '-ss', '00:00:01', '-i', file_path,
+                        '-vframes', '1', '-vf', 'scale=320:-1', target_thumb
+                    ]
+                    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
+                    if not os.path.exists(target_thumb) or os.path.getsize(target_thumb) < 100:
+                        cmd[2] = '00:00:00'
+                        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
+
+                    if os.path.exists(target_thumb) and os.path.getsize(target_thumb) > 100:
+                        thumb_path = os.path.abspath(target_thumb)
+                except Exception as fe:
+                    print(f"FFmpeg thumbnail note: {fe}")
+
+        return thumb_path
+
     async def download_media_from_link(self, link, download_path):
         """Download media from a specific message link"""
         try:
@@ -85,11 +129,15 @@ class TelegramBatchDownloader:
             
             if file_path:
                 file_size = os.path.getsize(file_path)
+                thumb_path = await self.get_or_generate_thumbnail(message, file_path, download_path)
                 print(f"✅ Downloaded: {os.path.basename(file_path)} ({self.format_size(file_size)})")
                 return {
                     'path': file_path,
+                    'thumb': thumb_path,
                     'size': file_size,
                     'caption': message.message if message.message else None,
+                    'msg_id': message_id,
+                    'grouped_id': message.grouped_id,
                     'link': link
                 }
             return None
@@ -173,9 +221,31 @@ class TelegramBatchDownloader:
             if not batch:
                 return True
                 
-            # Group into 10-item chunks (Telegram album limit)
-            chunk_size = 10
-            chunks = [batch[i:i + chunk_size] for i in range(0, len(batch), chunk_size)]
+            # Group into chunks according to original grouped_id (preserving collections/albums)
+            chunks = []
+            current_album = []
+            current_gid = None
+
+            for item in batch:
+                gid = item.get('grouped_id')
+                if gid:
+                    if current_gid == gid and len(current_album) < 10:
+                        current_album.append(item)
+                    else:
+                        if current_album:
+                            chunks.append(current_album)
+                        current_album = [item]
+                        current_gid = gid
+                else:
+                    if current_album:
+                        chunks.append(current_album)
+                        current_album = []
+                        current_gid = None
+                    chunks.append([item])
+
+            if current_album:
+                chunks.append(current_album)
+
             total_chunks = len(chunks)
             uploaded_count = 0
             
@@ -186,7 +256,8 @@ class TelegramBatchDownloader:
                 if not chunk_paths:
                     continue
                     
-                print(f"  [Group {chunk_idx}/{total_chunks}] Uploading {len(chunk_paths)} media files as album...")
+                group_desc = f"Collection/Album ({len(chunk_paths)} files)" if len(chunk_paths) > 1 else f"#{chunk[0].get('msg_id', 'single')}"
+                print(f"  [Group {chunk_idx}/{total_chunks}] Uploading {group_desc}...")
                 
                 sent = False
                 retries = 0
@@ -195,19 +266,24 @@ class TelegramBatchDownloader:
                         if len(chunk_paths) > 1:
                             if any(chunk_captions):
                                 try:
-                                    await self.client.send_file(target_channel, chunk_paths, caption=chunk_captions)
+                                    await self.client.send_file(target_channel, chunk_paths, caption=chunk_captions, supports_streaming=True)
                                 except Exception:
-                                    await self.client.send_file(target_channel, chunk_paths)
+                                    await self.client.send_file(target_channel, chunk_paths, supports_streaming=True)
                             else:
-                                await self.client.send_file(target_channel, chunk_paths)
+                                await self.client.send_file(target_channel, chunk_paths, supports_streaming=True)
                         else:
+                            item = chunk[0]
                             is_vid = chunk_paths[0].lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.webm', '.m4v'))
                             cap = chunk_captions[0] if chunk_captions[0] else None
+                            thumb_p = item.get('thumb')
+                            valid_thumb = thumb_p if (thumb_p and os.path.exists(thumb_p)) else None
                             await self.client.send_file(
                                 target_channel,
                                 chunk_paths[0],
                                 caption=cap,
-                                supports_streaming=is_vid
+                                thumb=valid_thumb,
+                                supports_streaming=is_vid,
+                                force_document=False
                             )
                         sent = True
                         uploaded_count += len(chunk_paths)
@@ -224,11 +300,15 @@ class TelegramBatchDownloader:
                             if os.path.exists(file_p):
                                 try:
                                     is_vid = file_p.lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.webm', '.m4v'))
+                                    thumb_p = item.get('thumb')
+                                    valid_thumb = thumb_p if (thumb_p and os.path.exists(thumb_p)) else None
                                     await self.client.send_file(
                                         target_channel,
                                         file_p,
                                         caption=item.get('caption'),
-                                        supports_streaming=is_vid
+                                        thumb=valid_thumb,
+                                        supports_streaming=is_vid,
+                                        force_document=False
                                     )
                                     uploaded_count += 1
                                     await asyncio.sleep(1.5)

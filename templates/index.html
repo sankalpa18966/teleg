@@ -893,9 +893,23 @@
             if (manualBtn) {
                 manualBtn.href = data.download_url;
                 manualBtn.setAttribute('download', data.filename);
+                manualBtn.onclick = () => {
+                    fetch('/api/batch/pc_skip_delay', { method: 'POST' }).catch(() => {});
+                };
             }
 
-            // Automatically trigger the download in browser
+            // Trigger browser download via invisible iframe (bypasses browser popup blocker)
+            try {
+                const iframe = document.createElement('iframe');
+                iframe.style.display = 'none';
+                iframe.src = data.download_url;
+                document.body.appendChild(iframe);
+                setTimeout(() => iframe.remove(), 20000);
+            } catch (err) {
+                console.error('Iframe download trigger note:', err);
+            }
+
+            // Also attempt regular click as fallback
             try {
                 const a = document.createElement('a');
                 a.href = data.download_url;
@@ -903,9 +917,14 @@
                 document.body.appendChild(a);
                 a.click();
                 a.remove();
-            } catch (err) {
-                console.error('Auto download trigger note:', err);
-            }
+            } catch (err) {}
+
+            // Immediately acknowledge to server so it proceeds seamlessly
+            fetch('/api/batch/pc_ack', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ filename: data.filename })
+            }).catch(() => {});
 
             showToast(`📥 Saving to PC: ${data.filename} (${data.file_size_mb} MB)`, 'success');
         });

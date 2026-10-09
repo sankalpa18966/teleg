@@ -957,6 +957,13 @@ def get_file(filename):
     if not os.path.exists(file_path):
         return "File not found or already downloaded.", 404
 
+    # Signal immediately that browser is downloading the file
+    if safe_filename in active_pc_events:
+        try:
+            active_pc_events[safe_filename].set()
+        except Exception:
+            pass
+
     delete_after = request.args.get('delete_after', 'false').lower() == 'true'
     is_batch = request.args.get('batch', 'false').lower() == 'true'
     mime = mimetypes.guess_type(file_path)[0] or 'application/octet-stream'
@@ -1011,6 +1018,11 @@ def batch_pc_ack():
 def batch_pc_skip_delay():
     """Skip the delay countdown and proceed to next file immediately."""
     active_pc_skip_delay.set()
+    for ev in list(active_pc_events.values()):
+        try:
+            ev.set()
+        except Exception:
+            pass
     return jsonify({'status': 'ok'})
 
 
@@ -1633,11 +1645,11 @@ async def batch_download_to_pc(base_link, start_id, end_id, delay_seconds=5, del
                     'pc_download', current_idx, total_messages
                 )
 
-                # Wait for PC stream to finish (or timeout up to 300s, or user skip)
-                wait_seconds = 300
-                while wait_seconds > 0 and not event.is_set() and batch_status['is_running']:
-                    await asyncio.sleep(1)
-                    wait_seconds -= 1
+                # Wait for PC download trigger (max 5-6s or until event/skip is set)
+                wait_seconds = 6.0
+                while wait_seconds > 0 and not event.is_set() and not active_pc_skip_delay.is_set() and batch_status['is_running']:
+                    await asyncio.sleep(0.5)
+                    wait_seconds -= 0.5
 
                 active_pc_events.pop(safe_filename, None)
 
@@ -1650,7 +1662,8 @@ async def batch_download_to_pc(base_link, start_id, end_id, delay_seconds=5, del
                     emit_batch_status('⏸️ Process stopped by user', 'idle')
                     return
 
-                # Ensure storage cleanup on VPS
+                # Small buffer so browser download stream begins, then clean storage
+                await asyncio.sleep(0.5)
                 if delete_after and os.path.exists(abs_path):
                     try:
                         os.remove(abs_path)
@@ -1665,6 +1678,7 @@ async def batch_download_to_pc(base_link, start_id, end_id, delay_seconds=5, del
 
                 # Delay before fetching the next file
                 if msg_id < end_id and batch_status['is_running'] and delay_seconds > 0:
+                    active_pc_skip_delay.clear()
                     for sec in range(delay_seconds, 0, -1):
                         if not batch_status['is_running'] or active_pc_skip_delay.is_set():
                             break

@@ -797,11 +797,18 @@
             <div class="form-group" style="margin-bottom: 18px;">
                 <label style="font-size: 13px; font-weight: 600; color: var(--text-muted); margin-bottom: 10px; display: block;">⚙️ Batch Mode</label>
                 <div style="display: flex; gap: 12px; flex-wrap: wrap;">
+                    <label style="flex: 1; min-width: 220px; display: flex; align-items: flex-start; gap: 10px; cursor: pointer; background: rgba(16,185,129,0.08); border: 1.5px solid rgba(16,185,129,0.6); border-radius: 12px; padding: 12px 16px; transition: border-color 0.2s;" id="batchModeZipLabel">
+                        <input type="radio" name="batchMode" value="zip_download" checked onchange="toggleBatchMode()" style="width: auto; margin-top: 2px;">
+                        <span>
+                            <strong style="color: var(--success);">📦 Download as ZIP Archive</strong> <span style="font-size: 10px; background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.4); padding: 2px 6px; border-radius: 8px; font-weight: 700; margin-left: 4px;">RECOMMENDED</span><br>
+                            <small style="color: var(--text-muted);">Packs range into a single .zip file. 1-click download to PC, avoids duplicates &amp; browser popup issues.</small>
+                        </span>
+                    </label>
                     <label style="flex: 1; min-width: 200px; display: flex; align-items: flex-start; gap: 10px; cursor: pointer; background: rgba(56,189,248,0.07); border: 1.5px solid rgba(56,189,248,0.18); border-radius: 12px; padding: 12px 16px; transition: border-color 0.2s;" id="batchModeDownloadLabel">
-                        <input type="radio" name="batchMode" value="download_upload" checked onchange="toggleBatchMode()" style="width: auto; margin-top: 2px;">
+                        <input type="radio" name="batchMode" value="download_upload" onchange="toggleBatchMode()" style="width: auto; margin-top: 2px;">
                         <span>
                             <strong style="color: var(--primary);">📥 Download &amp; Upload</strong><br>
-                            <small style="color: var(--text-muted);">Downloads to VPS then re-uploads. Removes forward badge. Supports captions.</small>
+                            <small style="color: var(--text-muted);">Downloads to VPS then re-uploads to Channel. Removes forward badge. Supports captions.</small>
                         </span>
                     </label>
                     <label style="flex: 1; min-width: 200px; display: flex; align-items: flex-start; gap: 10px; cursor: pointer; background: rgba(139,92,246,0.07); border: 1.5px solid rgba(139,92,246,0.18); border-radius: 12px; padding: 12px 16px; transition: border-color 0.2s;" id="batchModeForwardLabel">
@@ -811,11 +818,11 @@
                             <small style="color: var(--text-muted);">Instantly forwards messages via Telegram relay. Fast, no disk usage. Keeps forward badge.</small>
                         </span>
                     </label>
-                    <label style="flex: 1; min-width: 200px; display: flex; align-items: flex-start; gap: 10px; cursor: pointer; background: rgba(16,185,129,0.07); border: 1.5px solid rgba(16,185,129,0.18); border-radius: 12px; padding: 12px 16px; transition: border-color 0.2s;" id="batchModePcLabel">
+                    <label style="flex: 1; min-width: 200px; display: flex; align-items: flex-start; gap: 10px; cursor: pointer; background: rgba(245,158,11,0.07); border: 1.5px solid rgba(245,158,11,0.18); border-radius: 12px; padding: 12px 16px; transition: border-color 0.2s;" id="batchModePcLabel">
                         <input type="radio" name="batchMode" value="pc_download" onchange="toggleBatchMode()" style="width: auto; margin-top: 2px;">
                         <span>
-                            <strong style="color: var(--success);">💻 Download to My PC</strong><br>
-                            <small style="color: var(--text-muted);">Sequentially downloads to your PC with delay &amp; auto-cleans VPS storage after each file.</small>
+                            <strong style="color: #fbbf24;">💻 Sequential PC Download</strong><br>
+                            <small style="color: var(--text-muted);">Sequentially downloads file-by-file to your PC with delay &amp; auto-cleans VPS storage.</small>
                         </span>
                     </label>
                 </div>
@@ -881,6 +888,36 @@
                     <input type="checkbox" id="batchDeleteAfter" checked style="width: auto;">
                     <span id="batchDeleteLabelText">🗑️ Delete downloaded files after upload (recommended to save disk space)</span>
                 </label>
+            </div>
+
+            <!-- Active PC ZIP Ready Card -->
+            <div id="batchZipActiveCard" style="display: none; margin-bottom: 20px; padding: 18px 20px; background: rgba(16, 185, 129, 0.08); border: 1.5px solid rgba(16, 185, 129, 0.35); border-radius: 14px;">
+                <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <div style="width: 38px; height: 38px; border-radius: 50%; background: rgba(16, 185, 129, 0.2); display: flex; align-items: center; justify-content: center; color: var(--success); font-size: 18px;">
+                            <i class="fa-solid fa-file-zipper"></i>
+                        </div>
+                        <div>
+                            <div style="font-weight: 700; font-size: 15px; color: #fff;">📦 Batch ZIP Archive Ready!</div>
+                            <div style="font-size: 12px; color: var(--text-muted);">All media files compressed into a single ZIP archive.</div>
+                        </div>
+                    </div>
+                    <span id="batchZipFilesBadge" style="font-size: 11px; font-weight: 600; padding: 4px 10px; border-radius: 20px; background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.4);">
+                        0 Files
+                    </span>
+                </div>
+
+                <div style="background: rgba(15, 23, 42, 0.6); border-radius: 10px; padding: 12px 16px; margin-bottom: 14px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
+                    <div>
+                        <div style="font-size: 13px; font-weight: 600; color: #fff; word-break: break-all;" id="batchZipCurrentFilename">batch.zip</div>
+                        <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">Archive Size: <strong id="batchZipCurrentSize" style="color: var(--success);">0 MB</strong></div>
+                    </div>
+                </div>
+
+                <a id="batchZipManualDownloadBtn" href="#" class="btn btn-success" style="width: 100%; text-decoration: none; font-size: 15px; padding: 14px 20px; display: inline-flex; align-items: center; justify-content: center; gap: 10px; font-weight: 700;">
+                    <i class="fa-solid fa-circle-down" style="font-size: 20px;"></i>
+                    <span>Click Here to Save ZIP Archive to Your PC</span>
+                </a>
             </div>
 
             <!-- Active PC Download Real-time Card -->
@@ -986,6 +1023,44 @@
             updateBatchUI(data);
         });
 
+        // Batch ZIP Archive Ready Listener
+        socket.on('batch_zip_ready', (data) => {
+            const zipCard = document.getElementById('batchZipActiveCard');
+            if (zipCard) zipCard.style.display = 'block';
+
+            const fnElem = document.getElementById('batchZipCurrentFilename');
+            if (fnElem) fnElem.textContent = data.filename;
+
+            const szElem = document.getElementById('batchZipCurrentSize');
+            if (szElem) szElem.textContent = data.file_size_mb + ' MB';
+
+            const badgeElem = document.getElementById('batchZipFilesBadge');
+            if (badgeElem) badgeElem.textContent = `${data.total_files} Files`;
+
+            const manualBtn = document.getElementById('batchZipManualDownloadBtn');
+            if (manualBtn) {
+                manualBtn.href = data.download_url;
+                manualBtn.setAttribute('download', data.filename);
+            }
+
+            // Trigger ONE single automatic browser download cleanly
+            try {
+                const a = document.createElement('a');
+                a.href = data.download_url;
+                a.download = data.filename;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+            } catch (err) {
+                console.error('ZIP auto download trigger error:', err);
+            }
+
+            showToast(`📦 ZIP Archive Ready: ${data.filename} (${data.file_size_mb} MB)`, 'success');
+        });
+
+        // Deduplication set to prevent browser double downloads
+        const _pcDownloadDedupe = new Set();
+
         socket.on('batch_pc_file_ready', (data) => {
             const pcCard = document.getElementById('batchPcActiveCard');
             if (pcCard) pcCard.style.display = 'block';
@@ -1008,26 +1083,28 @@
                 };
             }
 
-            // Trigger browser download via invisible iframe (bypasses browser popup blocker)
-            try {
-                const iframe = document.createElement('iframe');
-                iframe.style.display = 'none';
-                iframe.src = data.download_url;
-                document.body.appendChild(iframe);
-                setTimeout(() => iframe.remove(), 20000);
-            } catch (err) {
-                console.error('Iframe download trigger note:', err);
-            }
+            // Deduplicate to ensure no file triggers twice
+            if (!_pcDownloadDedupe.has(data.filename)) {
+                _pcDownloadDedupe.add(data.filename);
+                setTimeout(() => _pcDownloadDedupe.delete(data.filename), 20000);
 
-            // Also attempt regular click as fallback
-            try {
-                const a = document.createElement('a');
-                a.href = data.download_url;
-                a.download = data.filename;
-                document.body.appendChild(a);
-                a.click();
-                a.remove();
-            } catch (err) {}
+                // Trigger ONE single browser download via click (avoids iframe + a.click double download)
+                try {
+                    const a = document.createElement('a');
+                    a.href = data.download_url;
+                    a.download = data.filename;
+                    document.body.appendChild(a);
+                    a.click();
+                    a.remove();
+                } catch (err) {
+                    console.error('Download click note, trying iframe fallback:', err);
+                    const iframe = document.createElement('iframe');
+                    iframe.style.display = 'none';
+                    iframe.src = data.download_url;
+                    document.body.appendChild(iframe);
+                    setTimeout(() => iframe.remove(), 20000);
+                }
+            }
 
             // Immediately acknowledge to server so it proceeds seamlessly
             fetch('/api/batch/pc_ack', {
@@ -1640,16 +1717,18 @@
             const mode = document.querySelector('input[name="batchMode"]:checked').value;
             const isForward = mode === 'direct_forward';
             const isPc = mode === 'pc_download';
+            const isZip = mode === 'zip_download';
+            const isAnyPc = isPc || isZip;
 
             // Show/hide options based on mode
             const targetGroup = document.getElementById('batchTargetChannelGroup');
-            if (targetGroup) targetGroup.style.display = isPc ? 'none' : '';
+            if (targetGroup) targetGroup.style.display = isAnyPc ? 'none' : '';
 
             const targetAccGroup = document.getElementById('batchTargetAccountGroup');
-            if (targetAccGroup) targetAccGroup.style.display = isPc ? 'none' : '';
+            if (targetAccGroup) targetAccGroup.style.display = isAnyPc ? 'none' : '';
 
             const maxSizeGroup = document.getElementById('batchMaxSizeGroup');
-            if (maxSizeGroup) maxSizeGroup.style.display = (isForward || isPc) ? 'none' : '';
+            if (maxSizeGroup) maxSizeGroup.style.display = (isForward || isAnyPc) ? 'none' : '';
 
             const delayGroup = document.getElementById('batchDelayGroup');
             if (delayGroup) delayGroup.style.display = isPc ? '' : 'none';
@@ -1659,9 +1738,13 @@
                 deleteGroup.style.display = isForward ? 'none' : '';
                 const deleteLabel = document.getElementById('batchDeleteLabelText');
                 if (deleteLabel) {
-                    deleteLabel.textContent = isPc
-                        ? '🧹 Auto-clean VPS storage immediately after each file reaches PC (recommended to keep disk free)'
-                        : '🗑️ Delete downloaded files after upload (recommended to save disk space)';
+                    if (isZip) {
+                        deleteLabel.textContent = '🧹 Auto-clean temporary files on VPS after creating ZIP (saves disk space)';
+                    } else if (isPc) {
+                        deleteLabel.textContent = '🧹 Auto-clean VPS storage immediately after each file reaches PC';
+                    } else {
+                        deleteLabel.textContent = '🗑️ Delete downloaded files after upload (recommended to save disk space)';
+                    }
                 }
             }
 
@@ -1670,24 +1753,28 @@
             if (btnText) {
                 btnText.textContent = isForward
                     ? 'Start Batch Forward'
+                    : isZip
+                    ? 'Start Batch Download as ZIP'
                     : isPc
-                    ? 'Start Batch Download to PC'
+                    ? 'Start Sequential PC Download'
                     : 'Start Batch Download & Upload';
             }
 
             // Update stat label
             const statLbl = document.getElementById('batchDownloadedLbl');
             if (statLbl) {
-                statLbl.textContent = isForward ? 'Forwarded' : isPc ? 'Saved to PC' : 'Downloaded';
+                statLbl.textContent = isForward ? 'Forwarded' : isAnyPc ? 'Downloaded' : 'Downloaded';
             }
 
             // Highlight selected mode card
+            const zipLabel = document.getElementById('batchModeZipLabel');
             const dlLabel = document.getElementById('batchModeDownloadLabel');
             const fwdLabel = document.getElementById('batchModeForwardLabel');
             const pcLabel = document.getElementById('batchModePcLabel');
+            if (zipLabel) zipLabel.style.borderColor = isZip ? 'rgba(16,185,129,0.7)' : 'rgba(16,185,129,0.18)';
             if (dlLabel) dlLabel.style.borderColor = (mode === 'download_upload') ? 'rgba(56,189,248,0.7)' : 'rgba(56,189,248,0.18)';
             if (fwdLabel) fwdLabel.style.borderColor = (mode === 'direct_forward') ? 'rgba(139,92,246,0.7)' : 'rgba(139,92,246,0.18)';
-            if (pcLabel) pcLabel.style.borderColor = (mode === 'pc_download') ? 'rgba(16,185,129,0.7)' : 'rgba(16,185,129,0.18)';
+            if (pcLabel) pcLabel.style.borderColor = (mode === 'pc_download') ? 'rgba(245,158,11,0.7)' : 'rgba(245,158,11,0.18)';
         }
 
         // Run once on load to set correct highlight
@@ -1755,6 +1842,8 @@
             const target_account_id = document.getElementById('batchTargetAccountSelect') ? document.getElementById('batchTargetAccountSelect').value : null;
             const isForward = batchMode === 'direct_forward';
             const isPc = batchMode === 'pc_download';
+            const isZip = batchMode === 'zip_download';
+            const isAnyPc = isPc || isZip;
 
             // Validation
             if (!baseLink) {
@@ -1769,7 +1858,7 @@
                 showToast('Start ID must be less than or equal to End ID', 'error');
                 return;
             }
-            if (!isPc && !targetChannel) {
+            if (!isAnyPc && !targetChannel) {
                 showToast('Please enter target channel', 'error');
                 return;
             }
@@ -1780,7 +1869,7 @@
 
             const restoreBtn = () => {
                 btn.disabled = false;
-                btn.innerHTML = `<i class="fa-solid fa-play"></i> <span id="startBatchBtnText">${isForward ? 'Start Batch Forward' : isPc ? 'Start Batch Download to PC' : 'Start Batch Download &amp; Upload'}</span>`;
+                btn.innerHTML = `<i class="fa-solid fa-play"></i> <span id="startBatchBtnText">${isForward ? 'Start Batch Forward' : isZip ? 'Start Batch Download as ZIP' : isPc ? 'Start Sequential PC Download' : 'Start Batch Download &amp; Upload'}</span>`;
             };
 
             try {

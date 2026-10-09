@@ -21,6 +21,7 @@ from datetime import datetime
 import threading
 import subprocess
 import shutil
+import zipfile
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'telegram-transfer-secret-key-2024'
@@ -1302,7 +1303,8 @@ def get_file(filename):
 
     delete_after = request.args.get('delete_after', 'false').lower() == 'true'
     is_batch = request.args.get('batch', 'false').lower() == 'true'
-    mime = mimetypes.guess_type(file_path)[0] or 'application/octet-stream'
+    is_zip = safe_filename.lower().endswith('.zip')
+    mime = 'application/zip' if is_zip else (mimetypes.guess_type(file_path)[0] or 'application/octet-stream')
 
     def on_close():
         # Signal the waiting batch thread that PC has finished receiving the file
@@ -1312,8 +1314,8 @@ def get_file(filename):
             except Exception:
                 pass
 
-        # Immediate cleanup for batch downloads or if delete_after is true
-        if delete_after or is_batch:
+        # Immediate cleanup for single files; for ZIP keep for 10 minutes so user can re-download if dropped
+        if (delete_after or is_batch) and not is_zip:
             try:
                 if os.path.exists(file_path):
                     os.remove(file_path)
@@ -1321,12 +1323,13 @@ def get_file(filename):
             except Exception as e:
                 print(f"Cleanup error for {safe_filename}: {e}")
         else:
-            # Auto-delete temp file from VPS 120 seconds after streaming to user's PC starts
+            # Auto-delete temp file from VPS (600s for ZIP, 120s for others)
             def _delayed_cleanup():
-                time.sleep(120)
+                time.sleep(600 if is_zip else 120)
                 try:
                     if os.path.exists(file_path):
                         os.remove(file_path)
+                        print(f"🧹 Delayed cleanup from VPS storage: {safe_filename}")
                 except Exception:
                     pass
 
@@ -1959,11 +1962,167 @@ async def batch_download_to_pc(base_link, start_id, end_id, delay_seconds=5, del
         emit_batch_status(f'❌ Error: {str(e)}', 'complete')
 
 
+async def batch_download_to_zip(base_link, start_id, end_id, delete_after=True, source_account_id=None):
+    """
+    Downloads media in message range from Telegram to a temporary folder on VPS,
+    compresses all downloaded media into a single .zip file,
+    removes the individual raw media files to save disk space,
+    and emits a batch_zip_ready event so the user can download the zip file in one click.
+    """
+    global batch_status
+    batch_dir = None
+    try:
+        source_client = get_client_for_account(source_account_id)
+        peer = parse_telegram_base_link(base_link)
+        entity = await source_client.get_entity(peer)
+
+        # Entity title/name for clean ZIP filename
+        entity_name = getattr(entity, 'username', None) or getattr(entity, 'title', None) or 'telegram'
+        entity_safe_name = re.sub(r'[^a-zA-Z0-9_\-]', '_', str(entity_name)).strip('_')[:25] or 'batch'
+
+        total_messages = end_id - start_id + 1
+        batch_status['total_items'] = total_messages
+        batch_status['downloaded_count'] = 0
+        batch_status['current_batch'] = 1
+        batch_status['batch_count'] = 1
+        batch_status['total_size_mb'] = 0
+
+        # Unique subfolder for this zip batch in DOWNLOAD_DIR
+        batch_timestamp = int(datetime.now().timestamp())
+        batch_folder_name = f"zip_batch_{batch_timestamp}_{start_id}_{end_id}"
+        batch_dir = os.path.join(DOWNLOAD_DIR, batch_folder_name)
+        os.makedirs(batch_dir, exist_ok=True)
+
+        emit_batch_status(
+            f'📦 Starting Batch Download to ZIP ({start_id} → {end_id})...',
+            'downloading', 0, total_messages
+        )
+
+        downloaded_files = []
+        total_downloaded_bytes = 0
+
+        for msg_id in range(start_id, end_id + 1):
+            if not batch_status['is_running']:
+                emit_batch_status('⏸️ Process stopped by user', 'idle')
+                if batch_dir and os.path.exists(batch_dir):
+                    shutil.rmtree(batch_dir, ignore_errors=True)
+                return
+
+            current_idx = msg_id - start_id + 1
+            batch_status['current_item'] = current_idx
+
+            emit_batch_status(
+                f'🔍 Checking message #{msg_id}/{end_id}...',
+                'downloading', current_idx, total_messages
+            )
+
+            try:
+                message = await source_client.get_messages(entity, ids=msg_id)
+
+                if not message or not message.media:
+                    emit_batch_status(f'⏭️ Skipping #{msg_id} (no media)', 'downloading', current_idx, total_messages)
+                    await asyncio.sleep(0.2)
+                    continue
+
+                def _dl_progress(c, t):
+                    pct = round((c / t) * 100, 1) if t > 0 else 0
+                    mb_curr = format_size_mb(c)
+                    mb_tot = format_size_mb(t)
+                    emit_batch_status(
+                        f'📥 Downloading #{msg_id} ({len(downloaded_files) + 1} ready): {mb_curr}/{mb_tot} MB ({pct}%)',
+                        'downloading', current_idx, total_messages
+                    )
+
+                file_path = await source_client.download_media(message, batch_dir, progress_callback=_dl_progress)
+
+                if file_path and os.path.exists(file_path):
+                    abs_path = os.path.abspath(file_path)
+                    f_size = os.path.getsize(abs_path)
+                    total_downloaded_bytes += f_size
+                    downloaded_files.append((msg_id, abs_path))
+                    batch_status['downloaded_count'] = len(downloaded_files)
+                    batch_status['total_size_mb'] = format_size_mb(total_downloaded_bytes)
+
+            except FloodWaitError as e:
+                emit_batch_status(f'⚠️ FloodWait: Telegram asked to wait {e.seconds}s...', 'downloading', current_idx, total_messages)
+                await asyncio.sleep(e.seconds + 1)
+            except Exception as e:
+                emit_batch_status(f'❌ Error downloading #{msg_id}: {str(e)}', 'downloading', current_idx, total_messages)
+                await asyncio.sleep(1)
+
+        if not downloaded_files:
+            emit_batch_status('⚠️ No media files were found in the selected range to zip.', 'complete')
+            batch_status['is_running'] = False
+            if batch_dir and os.path.exists(batch_dir):
+                shutil.rmtree(batch_dir, ignore_errors=True)
+            return
+
+        # Phase: Zipping
+        emit_batch_status(
+            f'🗜️ Compressing {len(downloaded_files)} files into ZIP archive...',
+            'batching', total_messages, total_messages
+        )
+
+        zip_filename = f"{entity_safe_name}_batch_{start_id}_{end_id}.zip"
+        zip_path = os.path.join(DOWNLOAD_DIR, zip_filename)
+
+        # Build ZIP archive with allowZip64=True
+        def _make_zip():
+            seen_names = set()
+            with zipfile.ZipFile(zip_path, 'w', compression=zipfile.ZIP_DEFLATED, allowZip64=True) as zf:
+                for mid, fpath in downloaded_files:
+                    base_name = os.path.basename(fpath)
+                    if base_name in seen_names:
+                        arcname = f"{mid}_{base_name}"
+                    else:
+                        arcname = base_name
+                    seen_names.add(arcname)
+                    zf.write(fpath, arcname=arcname)
+
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, _make_zip)
+
+        # Cleanup raw extracted files immediately to reclaim disk space
+        if batch_dir and os.path.exists(batch_dir):
+            shutil.rmtree(batch_dir, ignore_errors=True)
+
+        zip_size_bytes = os.path.getsize(zip_path) if os.path.exists(zip_path) else 0
+        zip_size_mb = format_size_mb(zip_size_bytes)
+
+        download_url = f'/api/get_file/{zip_filename}?batch=true&delete_after={str(delete_after).lower()}'
+
+        batch_status['is_running'] = False
+        batch_status['phase'] = 'complete'
+        batch_status['total_size_mb'] = zip_size_mb
+
+        socketio.emit('batch_zip_ready', {
+            'filename': zip_filename,
+            'download_url': download_url,
+            'file_size_mb': zip_size_mb,
+            'total_files': len(downloaded_files),
+            'start_id': start_id,
+            'end_id': end_id
+        })
+
+        emit_batch_status(
+            f'✅ ZIP Archive Ready! ({len(downloaded_files)} files, {zip_size_mb} MB). Download started!',
+            'complete', total_messages, total_messages
+        )
+
+    except Exception as e:
+        batch_status['is_running'] = False
+        if batch_dir and os.path.exists(batch_dir):
+            shutil.rmtree(batch_dir, ignore_errors=True)
+        emit_batch_status(f'❌ Error during ZIP process: {str(e)}', 'complete')
+
+
 def run_batch_process(base_link, start_id, end_id, target_channel, batch_mode, max_batch_gb, delete_after, delay_seconds=5, source_account_id=None, target_account_id=None):
-    """Thread wrapper for batch process - routes to forward, download+upload, or download to PC based on mode."""
+    """Thread wrapper for batch process - routes to forward, download+upload, zip, or sequential download to PC."""
     try:
         if batch_mode == 'direct_forward':
             run_async(batch_direct_forward(base_link, start_id, end_id, target_channel, source_account_id, target_account_id))
+        elif batch_mode == 'zip_download':
+            run_async(batch_download_to_zip(base_link, start_id, end_id, delete_after, source_account_id))
         elif batch_mode == 'pc_download':
             run_async(batch_download_to_pc(base_link, start_id, end_id, delay_seconds, delete_after, source_account_id))
         else:
@@ -1990,7 +2149,7 @@ def start_batch_download():
     start_id = data.get('start_id')
     end_id = data.get('end_id')
     target_channel = data.get('target_channel', '').strip()
-    batch_mode = data.get('batch_mode', 'download_upload')  # 'download_upload', 'direct_forward', 'pc_download'
+    batch_mode = data.get('batch_mode', 'zip_download')  # 'zip_download', 'download_upload', 'direct_forward', 'pc_download'
     max_batch_gb = data.get('max_batch_gb', 6)
     delete_after = data.get('delete_after', True)
     delay_seconds = int(data.get('delay_seconds', 5))
@@ -2000,7 +2159,7 @@ def start_batch_download():
     if not base_link:
         return jsonify({'status': 'error', 'message': 'Base link is required'}), 400
 
-    if batch_mode != 'pc_download' and not target_channel:
+    if batch_mode not in ('pc_download', 'zip_download') and not target_channel:
         return jsonify({'status': 'error', 'message': 'Target channel is required for upload / forward mode'}), 400
     
     try:

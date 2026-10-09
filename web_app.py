@@ -32,6 +32,7 @@ os.makedirs(SESSION_DIR, exist_ok=True)
 SESSION_PATH = os.path.join(SESSION_DIR, 'session')
 TRANSFERRED_DB = os.path.join(SESSION_DIR, 'transferred_messages.json')
 CONFIG_FILE = os.path.join(SESSION_DIR, 'config.json')
+ACCOUNTS_FILE = os.path.join(SESSION_DIR, 'accounts.json')
 LOGIN_LOG = os.path.join(SESSION_DIR, 'login_log.json')
 DOWNLOAD_DIR = os.path.abspath('telegram_downloads')
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
@@ -84,18 +85,22 @@ transfer_status = {
 
 client = None
 client_loop = None
-# Runtime credentials (populated from config or web form)
+# Runtime credentials (populated from config or web form for backward compatibility)
 _api_id = None
 _api_hash = None
 _phone = None
 
+# Multi-account client pool & state
+clients_pool = {}             # account_id -> TelegramClient
+pending_account_logins = {}   # temp_id -> dict with pending login request
+
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  Config / Log helpers
+#  Config / Accounts / Log helpers
 # ══════════════════════════════════════════════════════════════════════════════
 
 def load_config():
-    """Load saved API credentials from disk."""
+    """Load saved API credentials from disk (legacy config)."""
     if os.path.exists(CONFIG_FILE):
         try:
             with open(CONFIG_FILE, 'r') as f:
@@ -109,6 +114,43 @@ def save_config(api_id, api_hash, phone):
     """Persist API credentials to disk."""
     with open(CONFIG_FILE, 'w') as f:
         json.dump({'api_id': api_id, 'api_hash': api_hash, 'phone': phone}, f, indent=2)
+
+
+def load_accounts_data():
+    """Load accounts registry. Auto-migrates legacy config/session if accounts.json is missing."""
+    if os.path.exists(ACCOUNTS_FILE):
+        try:
+            with open(ACCOUNTS_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                if isinstance(data, dict) and 'accounts' in data and len(data['accounts']) > 0:
+                    return data
+        except Exception as e:
+            print(f"Error reading accounts file: {e}")
+
+    # Auto-migration from legacy single-account setup
+    data = {'accounts': []}
+    cfg = load_config()
+    legacy_session = os.path.join(SESSION_DIR, 'session.session')
+    if os.path.exists(legacy_session) or cfg.get('api_id'):
+        phone = cfg.get('phone', '')
+        data['accounts'].append({
+            'id': 'acc_default',
+            'name': f"Account 1 ({phone})" if phone else "Default Account",
+            'phone': phone,
+            'api_id': str(cfg.get('api_id', '')),
+            'api_hash': str(cfg.get('api_hash', '')),
+            'session_file': 'session',
+            'is_default': True,
+            'created_at': datetime.now().isoformat()
+        })
+        save_accounts_data(data)
+    return data
+
+
+def save_accounts_data(data):
+    """Persist accounts registry to disk."""
+    with open(ACCOUNTS_FILE, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
 
 
 def load_login_log():
@@ -179,42 +221,86 @@ def run_async(coro):
     return asyncio.run_coroutine_threadsafe(coro, client_loop).result()
 
 
+def get_client_for_account(account_id=None):
+    """
+    Get or connect a TelegramClient for the given account_id.
+    If account_id is None, returns client for the default account.
+    """
+    global clients_pool, client_loop, client
+    data = load_accounts_data()
+    accounts = data.get('accounts', [])
+    if not accounts:
+        raise RuntimeError("No Telegram accounts configured. Please add an account first.")
+
+    target_acc = None
+    if account_id:
+        for acc in accounts:
+            if acc.get('id') == account_id:
+                target_acc = acc
+                break
+
+    if not target_acc:
+        # Fall back to default account or first available account
+        for acc in accounts:
+            if acc.get('is_default'):
+                target_acc = acc
+                break
+        if not target_acc and accounts:
+            target_acc = accounts[0]
+
+    if not target_acc:
+        raise RuntimeError("Telegram account not found.")
+
+    acc_id = target_acc['id']
+    if acc_id in clients_pool and clients_pool[acc_id] is not None:
+        c = clients_pool[acc_id]
+        if c.is_connected():
+            return c
+
+    api_id = int(target_acc['api_id'])
+    api_hash = target_acc['api_hash']
+    session_file_name = target_acc.get('session_file', f'session_{acc_id}')
+    session_path = os.path.join(SESSION_DIR, session_file_name)
+
+    c = TelegramClient(session_path, api_id, api_hash)
+    run_async(c.connect())
+    clients_pool[acc_id] = c
+    if target_acc.get('is_default'):
+        client = c
+    return c
+
+
 def ensure_client():
-    """Instantiate and connect TelegramClient using current credentials."""
-    global client, _api_id, _api_hash
-    if client is None:
-        if not _api_id or not _api_hash:
-            raise RuntimeError("API credentials not configured")
-        client = TelegramClient(SESSION_PATH, int(_api_id), _api_hash)
-        run_async(client.connect())
+    """Instantiate and connect TelegramClient using current credentials (backward-compatible)."""
+    global client
+    client = get_client_for_account(None)
     return client
 
 
 def reset_client():
-    """Disconnect and clear the global client (used when credentials change)."""
-    global client
-    if client is not None:
-        try:
-            run_async(client.disconnect())
-        except Exception:
-            pass
-        client = None
+    """Disconnect and clear all clients in the pool."""
+    global client, clients_pool
+    for acc_id, c in list(clients_pool.items()):
+        if c is not None:
+            try:
+                run_async(c.disconnect())
+            except Exception:
+                pass
+    clients_pool.clear()
+    client = None
 
 
 def check_login_status():
-    global transfer_status, _api_id, _api_hash, _phone
-    # Load credentials from config if not in memory
-    if not _api_id:
-        cfg = load_config()
-        _api_id = cfg.get('api_id')
-        _api_hash = cfg.get('api_hash')
-        _phone = cfg.get('phone')
-
-    if not transfer_status['logged_in'] and os.path.exists(SESSION_PATH + '.session') and _api_id:
+    global transfer_status
+    data = load_accounts_data()
+    accounts = data.get('accounts', [])
+    transfer_status['logged_in'] = False
+    for acc in accounts:
         try:
-            ensure_client()
-            if run_async(client.is_user_authorized()):
+            c = get_client_for_account(acc['id'])
+            if run_async(c.is_user_authorized()):
                 transfer_status['logged_in'] = True
+                break
         except Exception:
             pass
 
@@ -287,9 +373,12 @@ async def get_or_generate_thumbnail(client, message, file_path, output_dir):
 #  Transfer async core
 # ══════════════════════════════════════════════════════════════════════════════
 
-async def transfer_media_async(source_channel, target_channel):
-    global client, transfer_status
+async def transfer_media_async(source_channel, target_channel, source_account_id=None, target_account_id=None):
+    global transfer_status
     try:
+        source_client = get_client_for_account(source_account_id)
+        target_client = get_client_for_account(target_account_id)
+
         # Resolve channel identifiers (int IDs or strings)
         def _resolve(ch):
             if isinstance(ch, str) and ch.lstrip('-').isdigit():
@@ -301,7 +390,7 @@ async def transfer_media_async(source_channel, target_channel):
 
         emit_status('📥 Fetching messages from channel...')
         messages = []
-        async for message in client.iter_messages(src, limit=None):
+        async for message in source_client.iter_messages(src, limit=None):
             if message.media:
                 messages.append(message)
 
@@ -369,10 +458,10 @@ async def transfer_media_async(source_channel, target_channel):
                 downloaded_group = []
                 for m in msgs_to_process:
                     try:
-                        f_path = await client.download_media(m, DOWNLOAD_DIR)
+                        f_path = await source_client.download_media(m, DOWNLOAD_DIR)
                         if f_path and os.path.exists(f_path):
                             abs_p = os.path.abspath(f_path)
-                            thumb_p = await get_or_generate_thumbnail(client, m, abs_p, DOWNLOAD_DIR)
+                            thumb_p = await get_or_generate_thumbnail(source_client, m, abs_p, DOWNLOAD_DIR)
                             downloaded_group.append({
                                 'path': abs_p,
                                 'thumb': thumb_p,
@@ -393,11 +482,11 @@ async def transfer_media_async(source_channel, target_channel):
                         try:
                             if any(captions):
                                 try:
-                                    await client.send_file(tgt, paths, caption=captions, supports_streaming=True)
+                                    await target_client.send_file(tgt, paths, caption=captions, supports_streaming=True)
                                 except Exception:
-                                    await client.send_file(tgt, paths, supports_streaming=True)
+                                    await target_client.send_file(tgt, paths, supports_streaming=True)
                             else:
-                                await client.send_file(tgt, paths, supports_streaming=True)
+                                await target_client.send_file(tgt, paths, supports_streaming=True)
 
                             for item in downloaded_group:
                                 mark_as_transferred(db, src, item['msg_id'])
@@ -444,21 +533,21 @@ async def transfer_media_async(source_channel, target_channel):
                 msg = msgs_to_process[0]
                 emit_status(f'📥 Downloading #{msg.id}...', processed, total)
                 try:
-                    file_path = await client.download_media(msg, DOWNLOAD_DIR)
+                    file_path = await source_client.download_media(msg, DOWNLOAD_DIR)
                     if file_path and os.path.exists(file_path):
                         abs_p = os.path.abspath(file_path)
                         emit_status(f'⬆️ Uploading {os.path.basename(abs_p)}...', processed, total)
                         caption = msg.message if msg.message else None
                         is_video = abs_p.lower().endswith(
                             ('.mp4', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.webm', '.m4v'))
-                        thumb_path = await get_or_generate_thumbnail(client, msg, abs_p, DOWNLOAD_DIR)
+                        thumb_path = await get_or_generate_thumbnail(source_client, msg, abs_p, DOWNLOAD_DIR)
                         valid_thumb = thumb_path if (thumb_path and os.path.exists(thumb_path)) else None
 
                         sent = False
                         retries = 0
                         while not sent and retries < 3 and transfer_status['is_running']:
                             try:
-                                await client.send_file(
+                                await target_client.send_file(
                                     tgt, abs_p,
                                     caption=caption,
                                     thumb=valid_thumb,
@@ -517,10 +606,9 @@ async def transfer_media_async(source_channel, target_channel):
         emit_status(f'❌ Error: {e}')
 
 
-def run_transfer(source_channel, target_channel):
+def run_transfer(source_channel, target_channel, source_account_id=None, target_account_id=None):
     try:
-        ensure_client()
-        run_async(transfer_media_async(source_channel, target_channel))
+        run_async(transfer_media_async(source_channel, target_channel, source_account_id, target_account_id))
     except Exception as e:
         transfer_status['is_running'] = False
         emit_status(f'❌ Error: {e}')
@@ -534,10 +622,12 @@ def run_transfer(source_channel, target_channel):
 def index():
     check_login_status()
     cfg = load_config()
+    acc_data = load_accounts_data()
     return render_template('index.html',
                            logged_in=transfer_status['logged_in'],
                            saved_phone=cfg.get('phone', ''),
-                           saved_api_id=cfg.get('api_id', ''))
+                           saved_api_id=cfg.get('api_id', ''),
+                           accounts=acc_data.get('accounts', []))
 
 
 @app.route('/api/status')
@@ -546,7 +636,231 @@ def get_status():
     return jsonify(transfer_status)
 
 
-# ── Login ──────────────────────────────────────────────────────────────────────
+# ── Multi-Account Management Routes ───────────────────────────────────────────
+
+@app.route('/api/accounts', methods=['GET'])
+def get_accounts():
+    """Return all configured Telegram accounts with authorization status."""
+    data = load_accounts_data()
+    acc_list = []
+    for acc in data.get('accounts', []):
+        is_auth = False
+        try:
+            c = get_client_for_account(acc['id'])
+            is_auth = run_async(c.is_user_authorized())
+        except Exception:
+            is_auth = False
+        acc_list.append({
+            'id': acc['id'],
+            'name': acc.get('name') or acc.get('phone') or acc['id'],
+            'phone': acc.get('phone', ''),
+            'api_id': acc.get('api_id', ''),
+            'is_default': acc.get('is_default', False),
+            'logged_in': is_auth
+        })
+    return jsonify({'status': 'success', 'accounts': acc_list})
+
+
+@app.route('/api/accounts/add', methods=['POST'])
+def add_account():
+    """Initiate adding a new account: connect and request Telegram login code."""
+    data = request.get_json() or {}
+    api_id = str(data.get('api_id', '')).strip()
+    api_hash = str(data.get('api_hash', '')).strip()
+    phone = str(data.get('phone', '')).strip()
+    name = str(data.get('name', '')).strip()
+
+    if not api_id or not api_hash or not phone:
+        return jsonify({'status': 'error', 'message': 'API ID, API Hash and Phone Number are required'}), 400
+
+    temp_id = f"acc_{int(time.time())}_{random.randint(100, 999)}"
+    session_file_name = f"session_{temp_id}"
+    session_path = os.path.join(SESSION_DIR, session_file_name)
+
+    try:
+        temp_client = TelegramClient(session_path, int(api_id), api_hash)
+        run_async(temp_client.connect())
+
+        # Check if session is already authorized
+        if run_async(temp_client.is_user_authorized()):
+            acc_data = load_accounts_data()
+            is_first = len(acc_data.get('accounts', [])) == 0
+            new_acc = {
+                'id': temp_id,
+                'name': name or f"Account ({phone})",
+                'phone': phone,
+                'api_id': api_id,
+                'api_hash': api_hash,
+                'session_file': session_file_name,
+                'is_default': is_first,
+                'created_at': datetime.now().isoformat()
+            }
+            acc_data['accounts'].append(new_acc)
+            save_accounts_data(acc_data)
+            clients_pool[temp_id] = temp_client
+            append_login_log(phone, 'account_added', f"Added {new_acc['name']}")
+            return jsonify({'status': 'logged_in', 'message': f"Account '{new_acc['name']}' already authorized and added!"})
+
+        # Request login verification code
+        run_async(temp_client.send_code_request(phone))
+        pending_account_logins[temp_id] = {
+            'client': temp_client,
+            'temp_id': temp_id,
+            'api_id': api_id,
+            'api_hash': api_hash,
+            'phone': phone,
+            'name': name or f"Account ({phone})"
+        }
+        append_login_log(phone, 'code_sent_multi', f"Verification code sent for {phone}")
+        return jsonify({
+            'status': 'code_sent',
+            'temp_id': temp_id,
+            'message': f"Verification code sent to Telegram for {phone}"
+        })
+
+    except Exception as e:
+        if os.path.exists(session_path + '.session'):
+            try:
+                os.remove(session_path + '.session')
+            except Exception:
+                pass
+        return jsonify({'status': 'error', 'message': str(e)}), 400
+
+
+@app.route('/api/accounts/verify', methods=['POST'])
+def verify_account():
+    """Verify code (and optional 2FA password) to complete adding new account."""
+    data = request.get_json() or {}
+    temp_id = data.get('temp_id', '').strip()
+    code = data.get('code', '').strip()
+    password = data.get('password', '').strip()
+
+    if not temp_id or temp_id not in pending_account_logins:
+        return jsonify({'status': 'error', 'message': 'Session expired. Please click "Send Login Code" again.'}), 400
+
+    if not code:
+        return jsonify({'status': 'error', 'message': 'Verification code is required'}), 400
+
+    pending = pending_account_logins[temp_id]
+    temp_client = pending['client']
+    phone = pending['phone']
+
+    try:
+        try:
+            run_async(temp_client.sign_in(phone, code))
+        except SessionPasswordNeededError:
+            if password:
+                run_async(temp_client.sign_in(password=password))
+            else:
+                return jsonify({
+                    'status': 'password_required',
+                    'temp_id': temp_id,
+                    'message': 'Two-step verification password (2FA) is required.'
+                })
+        except PhoneCodeInvalidError:
+            return jsonify({'status': 'error', 'message': 'Invalid verification code'}), 400
+
+        # Successfully authorized
+        acc_data = load_accounts_data()
+        is_first = len(acc_data.get('accounts', [])) == 0
+        new_acc = {
+            'id': temp_id,
+            'name': pending.get('name') or f"Account ({phone})",
+            'phone': phone,
+            'api_id': str(pending['api_id']),
+            'api_hash': str(pending['api_hash']),
+            'session_file': f"session_{temp_id}",
+            'is_default': is_first,
+            'created_at': datetime.now().isoformat()
+        }
+        acc_data['accounts'].append(new_acc)
+        save_accounts_data(acc_data)
+        clients_pool[temp_id] = temp_client
+        pending_account_logins.pop(temp_id, None)
+
+        append_login_log(phone, 'login_success_multi', f"Connected account '{new_acc['name']}'")
+        return jsonify({
+            'status': 'success',
+            'message': f"Account '{new_acc['name']}' connected successfully!",
+            'account': new_acc
+        })
+
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 400
+
+
+@app.route('/api/accounts/set_default', methods=['POST'])
+def set_default_account():
+    """Set an account as the default account."""
+    data = request.get_json() or {}
+    account_id = data.get('account_id')
+    if not account_id:
+        return jsonify({'status': 'error', 'message': 'account_id is required'}), 400
+
+    acc_data = load_accounts_data()
+    found = False
+    for acc in acc_data.get('accounts', []):
+        if acc['id'] == account_id:
+            acc['is_default'] = True
+            found = True
+        else:
+            acc['is_default'] = False
+
+    if not found:
+        return jsonify({'status': 'error', 'message': 'Account not found'}), 404
+
+    save_accounts_data(acc_data)
+    return jsonify({'status': 'success', 'message': 'Default account updated'})
+
+
+@app.route('/api/accounts/delete', methods=['POST'])
+def delete_account():
+    """Delete an account and remove its session file."""
+    data = request.get_json() or {}
+    account_id = data.get('account_id')
+    if not account_id:
+        return jsonify({'status': 'error', 'message': 'account_id is required'}), 400
+
+    acc_data = load_accounts_data()
+    accounts = acc_data.get('accounts', [])
+    target = None
+    for acc in accounts:
+        if acc['id'] == account_id:
+            target = acc
+            break
+
+    if not target:
+        return jsonify({'status': 'error', 'message': 'Account not found'}), 404
+
+    # Disconnect client
+    if account_id in clients_pool:
+        c = clients_pool.pop(account_id, None)
+        if c:
+            try:
+                run_async(c.disconnect())
+            except Exception:
+                pass
+
+    # Remove session file if non-default
+    session_file_name = target.get('session_file')
+    if session_file_name and session_file_name != 'session':
+        sf_path = os.path.join(SESSION_DIR, session_file_name + '.session')
+        if os.path.exists(sf_path):
+            try:
+                os.remove(sf_path)
+            except Exception:
+                pass
+
+    accounts.remove(target)
+    if target.get('is_default') and accounts:
+        accounts[0]['is_default'] = True
+
+    save_accounts_data(acc_data)
+    append_login_log(target.get('phone', ''), 'account_deleted', f"Removed account '{target.get('name')}'")
+    return jsonify({'status': 'success', 'message': f"Account '{target.get('name')}' removed"})
+
+
+# ── Legacy Login Endpoints (for backward compatibility) ────────────────────────
 
 @app.route('/api/login', methods=['POST'])
 def login():
@@ -561,16 +875,18 @@ def login():
         return jsonify({'status': 'error', 'message': 'API ID, API Hash and Phone are required'}), 400
 
     try:
-        # Reset client if credentials changed
-        if _api_id != api_id or _api_hash != api_hash:
-            reset_client()
-
-        _api_id = api_id
-        _api_hash = api_hash
-        _phone = phone
-
         save_config(api_id, api_hash, phone)
+        # Update default account in accounts.json
+        acc_data = load_accounts_data()
+        default_acc = next((a for a in acc_data.get('accounts', []) if a.get('is_default')), None)
+        if default_acc:
+            default_acc['api_id'] = str(api_id)
+            default_acc['api_hash'] = str(api_hash)
+            default_acc['phone'] = str(phone)
+            save_accounts_data(acc_data)
 
+        # Clear cached client for default account
+        clients_pool.pop('acc_default', None)
         ensure_client()
         is_authorized = run_async(client.is_user_authorized())
 
@@ -580,6 +896,7 @@ def login():
             return jsonify({'status': 'logged_in', 'message': 'Already logged in!'})
         else:
             run_async(client.send_code_request(phone))
+            _phone = phone
             append_login_log(phone, 'code_sent')
             return jsonify({'status': 'code_sent', 'message': 'Verification code sent to Telegram'})
 
@@ -600,22 +917,24 @@ def verify_code():
 
     try:
         ensure_client()
+        cfg = load_config()
+        phone_to_use = _phone or cfg.get('phone', '')
 
         try:
-            run_async(client.sign_in(_phone, code))
+            run_async(client.sign_in(phone_to_use, code))
             transfer_status['logged_in'] = True
-            append_login_log(_phone, 'login_success')
+            append_login_log(phone_to_use, 'login_success')
             return jsonify({'status': 'success', 'message': 'Login successful!'})
         except SessionPasswordNeededError:
             if password:
                 run_async(client.sign_in(password=password))
                 transfer_status['logged_in'] = True
-                append_login_log(_phone, 'login_success_2fa')
+                append_login_log(phone_to_use, 'login_success_2fa')
                 return jsonify({'status': 'success', 'message': 'Login successful (2FA)!'})
             else:
                 return jsonify({'status': 'password_required', 'message': '2FA password required'})
         except PhoneCodeInvalidError:
-            append_login_log(_phone, 'invalid_code')
+            append_login_log(phone_to_use, 'invalid_code')
             return jsonify({'status': 'error', 'message': 'Invalid verification code'}), 400
 
     except Exception as e:
@@ -648,14 +967,16 @@ def get_login_log():
 
 @app.route('/api/get_channels', methods=['POST'])
 def get_channels():
-    if not transfer_status['logged_in']:
-        return jsonify({'status': 'error', 'message': 'Not logged in'}), 400
+    data = request.get_json() or {}
+    account_id = data.get('account_id')
     try:
-        ensure_client()
+        ch_client = get_client_for_account(account_id)
+        if not run_async(ch_client.is_user_authorized()):
+            return jsonify({'status': 'error', 'message': 'Selected account is not logged in / authorized'}), 400
 
         async def _fetch():
             results = []
-            async for dialog in client.iter_dialogs():
+            async for dialog in ch_client.iter_dialogs():
                 entity = dialog.entity
                 entity_type = type(entity).__name__
                 username = getattr(entity, 'username', None)
@@ -687,14 +1008,17 @@ def get_channels():
 @app.route('/api/start', methods=['POST'])
 def start_transfer():
     global transfer_status
+    check_login_status()
     if not transfer_status['logged_in']:
-        return jsonify({'status': 'error', 'message': 'Not logged in'}), 400
+        return jsonify({'status': 'error', 'message': 'Not logged in. Please connect an account first.'}), 400
     if transfer_status['is_running']:
         return jsonify({'status': 'error', 'message': 'Transfer already running'}), 400
 
     data = request.get_json() or {}
     source_channel = data.get('source_channel', '').strip()
     target_channel = data.get('target_channel', '').strip()
+    source_account_id = data.get('source_account_id')
+    target_account_id = data.get('target_account_id')
 
     if not source_channel or not target_channel:
         return jsonify({'status': 'error', 'message': 'Source and Target channel IDs are required'}), 400
@@ -704,7 +1028,11 @@ def start_transfer():
         'success': 0, 'failed': 0, 'skipped': 0
     })
 
-    t = threading.Thread(target=run_transfer, args=(source_channel, target_channel), daemon=True)
+    t = threading.Thread(
+        target=run_transfer,
+        args=(source_channel, target_channel, source_account_id, target_account_id),
+        daemon=True
+    )
     t.start()
     return jsonify({'status': 'success', 'message': 'Transfer started'})
 
@@ -817,14 +1145,13 @@ def emit_link_progress(action_name, current, total):
 @app.route('/api/download_link', methods=['POST'])
 def download_link():
     """Download media from a Telegram message URL to device OR send to target channel."""
-    if not transfer_status['logged_in']:
-        return jsonify({'status': 'error', 'message': 'Not logged in'}), 400
-
     data = request.get_json() or {}
     url = data.get('url', '').strip()
     action = data.get('action', 'download')  # 'download' or 'send_channel'
     target_channel = data.get('target_channel', '').strip()
     send_mode = data.get('send_mode', 'clean')  # 'clean' or 'forward'
+    source_account_id = data.get('source_account_id')
+    target_account_id = data.get('target_account_id')
 
     if not url:
         return jsonify({'status': 'error', 'message': 'URL is required'}), 400
@@ -843,45 +1170,54 @@ def download_link():
         return ch
 
     try:
-        ensure_client()
+        source_client = get_client_for_account(source_account_id)
+        if not run_async(source_client.is_user_authorized()):
+            return jsonify({'status': 'error', 'message': 'Selected download/source account is not logged in'}), 400
 
         if action == 'send_channel':
+            target_client = get_client_for_account(target_account_id)
+            if not run_async(target_client.is_user_authorized()):
+                return jsonify({'status': 'error', 'message': 'Selected upload/target account is not logged in'}), 400
+
             tgt = _resolve(target_channel)
 
             async def _send_to_channel():
-                message = await fetch_message_by_url(client, parsed)
+                message = await fetch_message_by_url(source_client, parsed)
 
-                if send_mode == 'forward':
+                # Direct Telegram relay forwarding works only within the same account
+                if send_mode == 'forward' and source_client == target_client:
                     # Check if message is part of an album/collection
                     if message.grouped_id:
                         try:
                             min_id = max(1, message.id - 10)
                             max_id = message.id + 10
-                            nearby = await client.get_messages(parsed['peer'], min_id=min_id, max_id=max_id)
+                            nearby = await source_client.get_messages(parsed['peer'], min_id=min_id, max_id=max_id)
                             album_msgs = [m for m in nearby if m and m.grouped_id == message.grouped_id]
                             album_msgs.sort(key=lambda m: m.id)
                             if len(album_msgs) > 1:
                                 emit_link_progress('Forwarding Album', 1, 1)
-                                await client.forward_messages(tgt, album_msgs)
+                                await target_client.forward_messages(tgt, album_msgs)
                                 return f'Collection / Album ({len(album_msgs)} items) forwarded successfully!'
                         except Exception as e:
                             print(f"Could not forward as album: {e}")
 
                     emit_link_progress('Forwarding', 1, 1)
-                    await client.forward_messages(tgt, message)
+                    await target_client.forward_messages(tgt, message)
                     return 'Message forwarded successfully!'
                 else:
+                    # Clean upload OR cross-account transfer:
+                    # Source client downloads, target client uploads!
                     if not message.media:
                         raise ValueError('No media found in that message')
                     
                     def download_progress(c, t):
-                        emit_link_progress('Downloading', c, t)
+                        emit_link_progress('Downloading from Source Account', c, t)
 
-                    file_path = await client.download_media(message, DOWNLOAD_DIR, progress_callback=download_progress)
+                    file_path = await source_client.download_media(message, DOWNLOAD_DIR, progress_callback=download_progress)
                     if not file_path:
                         raise ValueError('Failed to download media')
 
-                    thumb_path = await get_or_generate_thumbnail(client, message, file_path, DOWNLOAD_DIR)
+                    thumb_path = await get_or_generate_thumbnail(source_client, message, file_path, DOWNLOAD_DIR)
 
                     try:
                         caption = message.message if message.message else None
@@ -889,10 +1225,10 @@ def download_link():
                             ('.mp4', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.webm', '.m4v')
                         )
                         def upload_progress(c, t):
-                            emit_link_progress('Uploading', c, t)
+                            emit_link_progress('Uploading via Target Account', c, t)
 
                         valid_thumb = thumb_path if (thumb_path and os.path.exists(thumb_path)) else None
-                        await client.send_file(
+                        await target_client.send_file(
                             tgt, file_path,
                             caption=caption,
                             thumb=valid_thumb,
@@ -910,7 +1246,7 @@ def download_link():
                                 os.remove(thumb_path)
                             except Exception:
                                 pass
-                    return 'Media uploaded to target channel successfully!'
+                    return 'Media transferred & uploaded to target channel successfully!'
 
             res_msg = run_async(_send_to_channel())
             return jsonify({'status': 'success', 'message': res_msg})
@@ -918,14 +1254,14 @@ def download_link():
         else:
             # Action: download to device
             async def _download():
-                message = await fetch_message_by_url(client, parsed)
+                message = await fetch_message_by_url(source_client, parsed)
                 if not message.media:
                     raise ValueError('No media found in that message')
 
                 def download_progress(c, t):
                     emit_link_progress('Downloading from Telegram', c, t)
 
-                file_path = await client.download_media(message, DOWNLOAD_DIR, progress_callback=download_progress)
+                file_path = await source_client.download_media(message, DOWNLOAD_DIR, progress_callback=download_progress)
                 return file_path
 
             file_path = run_async(_download())
@@ -1075,14 +1411,17 @@ def format_size_mb(bytes_size):
     return round(bytes_size / (1024 * 1024), 2)
 
 
-async def batch_download_and_upload(base_link, start_id, end_id, target_channel, max_batch_gb=6, delete_after=True):
-    """Download range of messages to server first, then upload as grouped media albums of up to 10 files per set"""
-    global client, batch_status
+async def batch_download_and_upload(base_link, start_id, end_id, target_channel, max_batch_gb=6, delete_after=True, source_account_id=None, target_account_id=None):
+    """Download range of messages to server first with source account, then upload as grouped media albums with target account"""
+    global batch_status
     
     try:
+        source_client = get_client_for_account(source_account_id)
+        target_client = get_client_for_account(target_account_id)
+
         # Parse base link
         peer = parse_telegram_base_link(base_link)
-        entity = await client.get_entity(peer)
+        entity = await source_client.get_entity(peer)
         
         total_messages = end_id - start_id + 1
         batch_status['total_items'] = total_messages
@@ -1100,7 +1439,7 @@ async def batch_download_and_upload(base_link, start_id, end_id, target_channel,
         
         target = _resolve(target_channel)
         try:
-            target_entity = await client.get_entity(target)
+            target_entity = await target_client.get_entity(target)
         except Exception:
             target_entity = target
         
@@ -1126,17 +1465,17 @@ async def batch_download_and_upload(base_link, start_id, end_id, target_channel,
             )
             
             try:
-                message = await client.get_messages(entity, ids=msg_id)
+                message = await source_client.get_messages(entity, ids=msg_id)
                 
                 if message and message.media:
-                    file_path = await client.download_media(message, DOWNLOAD_DIR)
+                    file_path = await source_client.download_media(message, DOWNLOAD_DIR)
                     
                     if file_path and os.path.exists(file_path):
                         abs_file_path = os.path.abspath(file_path)
                         file_size = os.path.getsize(abs_file_path)
                         
                         # Extract or download thumbnail for video/media
-                        thumb_path = await get_or_generate_thumbnail(client, message, abs_file_path, DOWNLOAD_DIR)
+                        thumb_path = await get_or_generate_thumbnail(source_client, message, abs_file_path, DOWNLOAD_DIR)
 
                         total_downloaded_bytes += file_size
                         batch_status['downloaded_count'] += 1
@@ -1230,11 +1569,11 @@ async def batch_download_and_upload(base_link, start_id, end_id, target_channel,
                         # Upload collection as Telegram Album / Media Group (max 10)
                         if any(chunk_captions):
                             try:
-                                await client.send_file(target_entity, chunk_paths, caption=chunk_captions, supports_streaming=True)
+                                await target_client.send_file(target_entity, chunk_paths, caption=chunk_captions, supports_streaming=True)
                             except Exception:
-                                await client.send_file(target_entity, chunk_paths, supports_streaming=True)
+                                await target_client.send_file(target_entity, chunk_paths, supports_streaming=True)
                         else:
-                            await client.send_file(target_entity, chunk_paths, supports_streaming=True)
+                            await target_client.send_file(target_entity, chunk_paths, supports_streaming=True)
                     else:
                         # Single file with custom thumbnail and streaming enabled
                         item = chunk[0]
@@ -1244,7 +1583,7 @@ async def batch_download_and_upload(base_link, start_id, end_id, target_channel,
                         cap = item['caption'] if item['caption'] else None
                         valid_thumb = f_thumb if (f_thumb and os.path.exists(f_thumb)) else None
 
-                        await client.send_file(
+                        await target_client.send_file(
                             target_entity,
                             f_path,
                             caption=cap,
@@ -1274,7 +1613,7 @@ async def batch_download_and_upload(base_link, start_id, end_id, target_channel,
                                 is_vid = item['path'].lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.webm', '.m4v'))
                                 f_thumb = item.get('thumb')
                                 valid_thumb = f_thumb if (f_thumb and os.path.exists(f_thumb)) else None
-                                await client.send_file(
+                                await target_client.send_file(
                                     target_entity,
                                     item['path'],
                                     caption=item['caption'],
@@ -1314,102 +1653,6 @@ async def batch_download_and_upload(base_link, start_id, end_id, target_channel,
         emit_batch_status(f'❌ Error: {str(e)}', 'complete')
 
 
-async def upload_single_batch(batch_files, target_channel, batch_number, total_batches_str):
-    """Upload batch files to target channel using Telethon send_file"""
-    global client
-    try:
-        if not batch_files:
-            return True
-            
-        total_files = len(batch_files)
-        
-        # Resolve target channel entity
-        def _resolve(ch):
-            if isinstance(ch, str) and ch.lstrip('-').isdigit():
-                return int(ch)
-            return ch
-            
-        target_resolved = _resolve(target_channel)
-        try:
-            target_entity = await client.get_entity(target_resolved)
-        except Exception:
-            target_entity = target_resolved
-        
-        # Collect absolute paths for existing downloaded files
-        files_to_send = []
-        for file_info in batch_files:
-            p = os.path.abspath(file_info['path'])
-            if os.path.exists(p):
-                files_to_send.append(p)
-                
-        if not files_to_send:
-            emit_batch_status('⚠️ No downloaded files found on disk to upload', 'uploading')
-            return False
-            
-        # Telegram albums support up to 10 files per group
-        chunk_size = 10
-        chunks = [files_to_send[i:i + chunk_size] for i in range(0, len(files_to_send), chunk_size)]
-        total_chunks = len(chunks)
-        
-        uploaded_count = 0
-        for chunk_idx, chunk in enumerate(chunks, 1):
-            emit_batch_status(
-                f'📤 Uploading group {chunk_idx}/{total_chunks} ({len(chunk)} files)...',
-                'uploading'
-            )
-            
-            uploaded_chunk = False
-            retry_count = 0
-            while not uploaded_chunk and retry_count < 3:
-                try:
-                    if len(chunk) > 1:
-                        # Send as Telethon album
-                        await client.send_file(
-                            target_entity,
-                            chunk
-                        )
-                    else:
-                        is_vid = chunk[0].lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.webm', '.m4v'))
-                        await client.send_file(
-                            target_entity,
-                            chunk[0],
-                            supports_streaming=is_vid
-                        )
-                    uploaded_chunk = True
-                    uploaded_count += len(chunk)
-                    emit_batch_status(
-                        f'✅ Uploaded group {chunk_idx}/{total_chunks} ({len(chunk)} files)',
-                        'uploading'
-                    )
-                    await asyncio.sleep(2)
-                except FloodWaitError as e:
-                    emit_batch_status(f'⚠️ FloodWait {e.seconds}s during upload...', 'uploading')
-                    await asyncio.sleep(e.seconds + 2)
-                    retry_count += 1
-                except Exception as chunk_err:
-                    # Fallback to sending files individually if group fails
-                    emit_batch_status(f'⚠️ Group upload note ({str(chunk_err)}), sending files individually...', 'uploading')
-                    for f_path in chunk:
-                        try:
-                            is_vid = f_path.lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.webm', '.m4v'))
-                            await client.send_file(
-                                target_entity,
-                                f_path,
-                                supports_streaming=is_vid
-                            )
-                            uploaded_count += 1
-                            await asyncio.sleep(1.5)
-                        except Exception as f_err:
-                            emit_batch_status(f'❌ Error uploading {os.path.basename(f_path)}: {str(f_err)}', 'uploading')
-                    uploaded_chunk = True
-            
-        return uploaded_count > 0
-        
-    except Exception as e:
-        emit_batch_status(f'❌ Error uploading batch: {str(e)}', 'uploading')
-        return False
-
-
 def cleanup_files(file_list):
     """Delete a list of files"""
     for file_info in file_list:
@@ -1420,13 +1663,23 @@ def cleanup_files(file_list):
             pass
 
 
-async def batch_direct_forward(base_link, start_id, end_id, target_channel):
+async def batch_direct_forward(base_link, start_id, end_id, target_channel, source_account_id=None, target_account_id=None):
     """Directly forward messages in a range using Telegram relay - no download, no re-upload."""
-    global client, batch_status
+    global batch_status
 
     try:
+        source_client = get_client_for_account(source_account_id)
+        target_client = get_client_for_account(target_account_id)
+
+        # Cross-account relay forward is impossible in Telegram protocol.
+        # If source != target, seamlessly fall back to download & upload!
+        if source_client != target_client:
+            emit_batch_status('ℹ️ Cross-account transfer detected: Automatically using Clean Download & Upload mode for different accounts.', 'downloading')
+            await batch_download_and_upload(base_link, start_id, end_id, target_channel, max_batch_gb=6, delete_after=True, source_account_id=source_account_id, target_account_id=target_account_id)
+            return
+
         peer = parse_telegram_base_link(base_link)
-        entity = await client.get_entity(peer)
+        entity = await source_client.get_entity(peer)
 
         def _resolve(ch):
             if isinstance(ch, str) and ch.lstrip('-').isdigit():
@@ -1435,7 +1688,7 @@ async def batch_direct_forward(base_link, start_id, end_id, target_channel):
 
         target = _resolve(target_channel)
         try:
-            target_entity = await client.get_entity(target)
+            target_entity = await source_client.get_entity(target)
         except Exception:
             target_entity = target
 
@@ -1454,7 +1707,6 @@ async def batch_direct_forward(base_link, start_id, end_id, target_channel):
         forwarded = 0
         failed = 0
 
-        # We buffer consecutive messages that share the same grouped_id to forward together as an album/collection
         current_group = []
         current_grouped_id = None
 
@@ -1471,10 +1723,10 @@ async def batch_direct_forward(base_link, start_id, end_id, target_channel):
             while not success and retries < 3 and batch_status['is_running']:
                 try:
                     if len(group_to_send) == 1:
-                        await client.forward_messages(target_entity, group_to_send[0])
+                        await source_client.forward_messages(target_entity, group_to_send[0])
                         item_label = f"#{group_to_send[0].id}"
                     else:
-                        await client.forward_messages(target_entity, group_to_send)
+                        await source_client.forward_messages(target_entity, group_to_send)
                         item_label = f"Collection/Album ({len(group_to_send)} items: #{group_to_send[0].id}..#{group_to_send[-1].id})"
 
                     forwarded += len(group_to_send)
@@ -1508,7 +1760,7 @@ async def batch_direct_forward(base_link, start_id, end_id, target_channel):
             )
 
             try:
-                message = await client.get_messages(entity, ids=msg_id)
+                message = await source_client.get_messages(entity, ids=msg_id)
                 if not message:
                     emit_batch_status(f'⏭️ Skipping #{msg_id} (not found)', 'forwarding', current_idx, total_messages)
                     continue
@@ -1551,16 +1803,17 @@ async def batch_direct_forward(base_link, start_id, end_id, target_channel):
         emit_batch_status(f'❌ Error: {str(e)}', 'complete')
 
 
-async def batch_download_to_pc(base_link, start_id, end_id, delay_seconds=5, delete_after=True):
+async def batch_download_to_pc(base_link, start_id, end_id, delay_seconds=5, delete_after=True, source_account_id=None):
     """
     Sequentially download messages in range from Telegram, send each to user's PC browser,
     clean storage on VPS immediately after sending, and wait configured delay before next file.
     """
-    global client, batch_status, active_pc_events, active_pc_skip_delay
+    global batch_status, active_pc_events, active_pc_skip_delay
 
     try:
+        source_client = get_client_for_account(source_account_id)
         peer = parse_telegram_base_link(base_link)
-        entity = await client.get_entity(peer)
+        entity = await source_client.get_entity(peer)
 
         total_messages = end_id - start_id + 1
         batch_status['total_items'] = total_messages
@@ -1592,7 +1845,7 @@ async def batch_download_to_pc(base_link, start_id, end_id, delay_seconds=5, del
             )
 
             try:
-                message = await client.get_messages(entity, ids=msg_id)
+                message = await source_client.get_messages(entity, ids=msg_id)
 
                 if not message or not message.media:
                     emit_batch_status(f'⏭️ Skipping #{msg_id} (no media found)', 'pc_download', current_idx, total_messages)
@@ -1610,7 +1863,7 @@ async def batch_download_to_pc(base_link, start_id, end_id, delay_seconds=5, del
                         'downloading', current_idx, total_messages
                     )
 
-                file_path = await client.download_media(message, DOWNLOAD_DIR, progress_callback=_dl_progress)
+                file_path = await source_client.download_media(message, DOWNLOAD_DIR, progress_callback=_dl_progress)
 
                 if not file_path or not os.path.exists(file_path):
                     emit_batch_status(f'⚠️ Failed to download media for #{msg_id}', 'pc_download', current_idx, total_messages)
@@ -1706,16 +1959,15 @@ async def batch_download_to_pc(base_link, start_id, end_id, delay_seconds=5, del
         emit_batch_status(f'❌ Error: {str(e)}', 'complete')
 
 
-def run_batch_process(base_link, start_id, end_id, target_channel, batch_mode, max_batch_gb, delete_after, delay_seconds=5):
+def run_batch_process(base_link, start_id, end_id, target_channel, batch_mode, max_batch_gb, delete_after, delay_seconds=5, source_account_id=None, target_account_id=None):
     """Thread wrapper for batch process - routes to forward, download+upload, or download to PC based on mode."""
     try:
-        ensure_client()
         if batch_mode == 'direct_forward':
-            run_async(batch_direct_forward(base_link, start_id, end_id, target_channel))
+            run_async(batch_direct_forward(base_link, start_id, end_id, target_channel, source_account_id, target_account_id))
         elif batch_mode == 'pc_download':
-            run_async(batch_download_to_pc(base_link, start_id, end_id, delay_seconds, delete_after))
+            run_async(batch_download_to_pc(base_link, start_id, end_id, delay_seconds, delete_after, source_account_id))
         else:
-            run_async(batch_download_and_upload(base_link, start_id, end_id, target_channel, max_batch_gb, delete_after))
+            run_async(batch_download_and_upload(base_link, start_id, end_id, target_channel, max_batch_gb, delete_after, source_account_id, target_account_id))
     except Exception as e:
         batch_status['is_running'] = False
         emit_batch_status(f'❌ Error: {str(e)}', 'complete')
@@ -1725,9 +1977,10 @@ def run_batch_process(base_link, start_id, end_id, target_channel, batch_mode, m
 def start_batch_download():
     """Start batch download process"""
     global batch_status
+    check_login_status()
     
     if not transfer_status['logged_in']:
-        return jsonify({'status': 'error', 'message': 'Not logged in'}), 400
+        return jsonify({'status': 'error', 'message': 'Not logged in. Please connect an account first.'}), 400
     
     if batch_status['is_running']:
         return jsonify({'status': 'error', 'message': 'Batch process already running'}), 400
@@ -1741,6 +1994,8 @@ def start_batch_download():
     max_batch_gb = data.get('max_batch_gb', 6)
     delete_after = data.get('delete_after', True)
     delay_seconds = int(data.get('delay_seconds', 5))
+    source_account_id = data.get('source_account_id')
+    target_account_id = data.get('target_account_id')
     
     if not base_link:
         return jsonify({'status': 'error', 'message': 'Base link is required'}), 400
@@ -1773,7 +2028,7 @@ def start_batch_download():
     # Start in background thread
     t = threading.Thread(
         target=run_batch_process,
-        args=(base_link, start_id, end_id, target_channel, batch_mode, max_batch_gb, delete_after, delay_seconds),
+        args=(base_link, start_id, end_id, target_channel, batch_mode, max_batch_gb, delete_after, delay_seconds, source_account_id, target_account_id),
         daemon=True
     )
     t.start()

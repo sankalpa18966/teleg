@@ -39,31 +39,28 @@ os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 # ── Auto-cleaner for temporary downloads ───────────────────────────────────────
 import time
 
-def start_auto_cleaner():
-    """Background thread that automatically purges temp files in telegram_downloads older than 60 seconds."""
-    def _cleaner_loop():
-        # Clean everything on startup
-        if os.path.exists(DOWNLOAD_DIR):
-            for f in os.listdir(DOWNLOAD_DIR):
-                fp = os.path.join(DOWNLOAD_DIR, f)
-                if os.path.isfile(fp):
-                    try:
-                        os.remove(fp)
-                    except Exception:
-                        pass
+# Active PC batch download synchronization
+active_pc_events = {}          # filename -> threading.Event()
+active_pc_skip_delay = threading.Event()
 
+def start_auto_cleaner():
+    """Background thread that automatically purges orphaned temp files in telegram_downloads older than 30 minutes."""
+    def _cleaner_loop():
         while True:
             try:
-                time.sleep(30)
+                time.sleep(60)
                 if os.path.exists(DOWNLOAD_DIR):
                     now = time.time()
                     for f in os.listdir(DOWNLOAD_DIR):
                         fp = os.path.join(DOWNLOAD_DIR, f)
                         if os.path.isfile(fp):
-                            if now - os.path.getmtime(fp) > 60:
+                            # Never clean files currently waiting or streaming to user's PC
+                            if f in active_pc_events:
+                                continue
+                            if now - os.path.getmtime(fp) > 1800:
                                 try:
                                     os.remove(fp)
-                                    print(f"🧹 Auto-cleaned temp file from VPS: {f}")
+                                    print(f"🧹 Auto-cleaned orphaned temp file from VPS: {f}")
                                 except Exception:
                                     pass
             except Exception:
@@ -960,19 +957,61 @@ def get_file(filename):
     if not os.path.exists(file_path):
         return "File not found or already downloaded.", 404
 
+    delete_after = request.args.get('delete_after', 'false').lower() == 'true'
+    is_batch = request.args.get('batch', 'false').lower() == 'true'
     mime = mimetypes.guess_type(file_path)[0] or 'application/octet-stream'
 
-    # Auto-delete temp file from VPS 300 seconds (5 mins) after streaming to user's PC starts
-    def _delayed_cleanup():
-        import time; time.sleep(300)
+    def on_close():
+        # Signal the waiting batch thread that PC has finished receiving the file
+        if safe_filename in active_pc_events:
+            try:
+                active_pc_events[safe_filename].set()
+            except Exception:
+                pass
+
+        # Immediate cleanup for batch downloads or if delete_after is true
+        if delete_after or is_batch:
+            try:
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+                    print(f"🧹 Cleaned from VPS storage immediately: {safe_filename}")
+            except Exception as e:
+                print(f"Cleanup error for {safe_filename}: {e}")
+        else:
+            # Auto-delete temp file from VPS 120 seconds after streaming to user's PC starts
+            def _delayed_cleanup():
+                time.sleep(120)
+                try:
+                    if os.path.exists(file_path):
+                        os.remove(file_path)
+                except Exception:
+                    pass
+
+            threading.Thread(target=_delayed_cleanup, daemon=True).start()
+
+    response = send_file(file_path, mimetype=mime, as_attachment=True, download_name=safe_filename)
+    response.call_on_close(on_close)
+    return response
+
+
+@app.route('/api/batch/pc_ack', methods=['POST'])
+def batch_pc_ack():
+    """Acknowledge receipt of a PC download from client side."""
+    data = request.get_json() or {}
+    filename = data.get('filename')
+    if filename and filename in active_pc_events:
         try:
-            if os.path.exists(file_path):
-                os.remove(file_path)
+            active_pc_events[filename].set()
         except Exception:
             pass
+    return jsonify({'status': 'ok'})
 
-    threading.Thread(target=_delayed_cleanup, daemon=True).start()
-    return send_file(file_path, mimetype=mime, as_attachment=True, download_name=safe_filename)
+
+@app.route('/api/batch/pc_skip_delay', methods=['POST'])
+def batch_pc_skip_delay():
+    """Skip the delay countdown and proceed to next file immediately."""
+    active_pc_skip_delay.set()
+    return jsonify({'status': 'ok'})
 
 
 @app.route('/api/clear_temp', methods=['POST'])
@@ -1500,12 +1539,167 @@ async def batch_direct_forward(base_link, start_id, end_id, target_channel):
         emit_batch_status(f'❌ Error: {str(e)}', 'complete')
 
 
-def run_batch_process(base_link, start_id, end_id, target_channel, batch_mode, max_batch_gb, delete_after):
-    """Thread wrapper for batch process - routes to forward or download+upload based on mode."""
+async def batch_download_to_pc(base_link, start_id, end_id, delay_seconds=5, delete_after=True):
+    """
+    Sequentially download messages in range from Telegram, send each to user's PC browser,
+    clean storage on VPS immediately after sending, and wait configured delay before next file.
+    """
+    global client, batch_status, active_pc_events, active_pc_skip_delay
+
+    try:
+        peer = parse_telegram_base_link(base_link)
+        entity = await client.get_entity(peer)
+
+        total_messages = end_id - start_id + 1
+        batch_status['total_items'] = total_messages
+        batch_status['downloaded_count'] = 0
+        batch_status['current_batch'] = 0
+        batch_status['batch_count'] = total_messages
+        batch_status['total_size_mb'] = 0
+
+        emit_batch_status(
+            f'💻 Starting PC Batch Download ({start_id} → {end_id}) with {delay_seconds}s delay...',
+            'pc_download', 0, total_messages
+        )
+
+        downloaded_count = 0
+        total_downloaded_bytes = 0
+
+        for msg_id in range(start_id, end_id + 1):
+            if not batch_status['is_running']:
+                emit_batch_status('⏸️ Process stopped by user', 'idle')
+                return
+
+            current_idx = msg_id - start_id + 1
+            batch_status['current_item'] = current_idx
+            batch_status['current_batch'] = current_idx
+
+            emit_batch_status(
+                f'🔍 Checking message {msg_id}/{end_id} from Telegram...',
+                'pc_download', current_idx, total_messages
+            )
+
+            try:
+                message = await client.get_messages(entity, ids=msg_id)
+
+                if not message or not message.media:
+                    emit_batch_status(f'⏭️ Skipping #{msg_id} (no media found)', 'pc_download', current_idx, total_messages)
+                    await asyncio.sleep(0.5)
+                    continue
+
+                emit_batch_status(f'📥 Downloading #{msg_id} from Telegram to VPS...', 'downloading', current_idx, total_messages)
+
+                def _dl_progress(c, t):
+                    pct = round((c / t) * 100, 1) if t > 0 else 0
+                    mb_curr = format_size_mb(c)
+                    mb_tot = format_size_mb(t)
+                    emit_batch_status(
+                        f'📥 Downloading #{msg_id} to VPS: {mb_curr}/{mb_tot} MB ({pct}%)',
+                        'downloading', current_idx, total_messages
+                    )
+
+                file_path = await client.download_media(message, DOWNLOAD_DIR, progress_callback=_dl_progress)
+
+                if not file_path or not os.path.exists(file_path):
+                    emit_batch_status(f'⚠️ Failed to download media for #{msg_id}', 'pc_download', current_idx, total_messages)
+                    continue
+
+                abs_path = os.path.abspath(file_path)
+                safe_filename = os.path.basename(abs_path)
+                file_size = os.path.getsize(abs_path)
+                total_downloaded_bytes += file_size
+                downloaded_count += 1
+                batch_status['downloaded_count'] = downloaded_count
+                batch_status['total_size_mb'] = format_size_mb(total_downloaded_bytes)
+
+                # Event to wait for stream to PC to complete
+                event = threading.Event()
+                active_pc_events[safe_filename] = event
+                active_pc_skip_delay.clear()
+
+                download_url = f'/api/get_file/{safe_filename}?batch=true&delete_after={str(delete_after).lower()}'
+                socketio.emit('batch_pc_file_ready', {
+                    'filename': safe_filename,
+                    'download_url': download_url,
+                    'msg_id': msg_id,
+                    'file_size_mb': format_size_mb(file_size),
+                    'current': current_idx,
+                    'total': total_messages,
+                    'delay': delay_seconds
+                })
+
+                emit_batch_status(
+                    f'💻 #{msg_id}: Ready! Streaming {safe_filename} ({format_size_mb(file_size)} MB) to PC...',
+                    'pc_download', current_idx, total_messages
+                )
+
+                # Wait for PC stream to finish (or timeout up to 300s, or user skip)
+                wait_seconds = 300
+                while wait_seconds > 0 and not event.is_set() and batch_status['is_running']:
+                    await asyncio.sleep(1)
+                    wait_seconds -= 1
+
+                active_pc_events.pop(safe_filename, None)
+
+                if not batch_status['is_running']:
+                    if delete_after and os.path.exists(abs_path):
+                        try:
+                            os.remove(abs_path)
+                        except Exception:
+                            pass
+                    emit_batch_status('⏸️ Process stopped by user', 'idle')
+                    return
+
+                # Ensure storage cleanup on VPS
+                if delete_after and os.path.exists(abs_path):
+                    try:
+                        os.remove(abs_path)
+                        print(f"🧹 VPS storage cleaned: removed {safe_filename}")
+                    except Exception as e:
+                        print(f"Cleanup error: {e}")
+
+                emit_batch_status(
+                    f'🧹 VPS Storage cleaned for #{msg_id} ({safe_filename})',
+                    'pc_download', current_idx, total_messages
+                )
+
+                # Delay before fetching the next file
+                if msg_id < end_id and batch_status['is_running'] and delay_seconds > 0:
+                    for sec in range(delay_seconds, 0, -1):
+                        if not batch_status['is_running'] or active_pc_skip_delay.is_set():
+                            break
+                        emit_batch_status(
+                            f'⏳ Delay: Waiting {sec}s before next download (#{msg_id + 1}/{end_id})... [VPS Storage Cleaned 🧹]',
+                            'delay', current_idx, total_messages
+                        )
+                        await asyncio.sleep(1)
+
+            except FloodWaitError as e:
+                emit_batch_status(f'⚠️ FloodWait: Telegram asked to wait {e.seconds}s...', 'pc_download', current_idx, total_messages)
+                await asyncio.sleep(e.seconds + 1)
+            except Exception as e:
+                emit_batch_status(f'❌ Error on #{msg_id}: {str(e)}', 'pc_download', current_idx, total_messages)
+                await asyncio.sleep(1)
+
+        batch_status['is_running'] = False
+        emit_batch_status(
+            f'✅ PC Batch Download complete! {downloaded_count} file(s) saved to PC. VPS storage 100% clean.',
+            'complete'
+        )
+
+    except Exception as e:
+        batch_status['is_running'] = False
+        emit_batch_status(f'❌ Error: {str(e)}', 'complete')
+
+
+def run_batch_process(base_link, start_id, end_id, target_channel, batch_mode, max_batch_gb, delete_after, delay_seconds=5):
+    """Thread wrapper for batch process - routes to forward, download+upload, or download to PC based on mode."""
     try:
         ensure_client()
         if batch_mode == 'direct_forward':
             run_async(batch_direct_forward(base_link, start_id, end_id, target_channel))
+        elif batch_mode == 'pc_download':
+            run_async(batch_download_to_pc(base_link, start_id, end_id, delay_seconds, delete_after))
         else:
             run_async(batch_download_and_upload(base_link, start_id, end_id, target_channel, max_batch_gb, delete_after))
     except Exception as e:
@@ -1515,7 +1709,7 @@ def run_batch_process(base_link, start_id, end_id, target_channel, batch_mode, m
 
 @app.route('/api/batch/start', methods=['POST'])
 def start_batch_download():
-    """Start batch download and upload process"""
+    """Start batch download process"""
     global batch_status
     
     if not transfer_status['logged_in']:
@@ -1529,12 +1723,16 @@ def start_batch_download():
     start_id = data.get('start_id')
     end_id = data.get('end_id')
     target_channel = data.get('target_channel', '').strip()
-    batch_mode = data.get('batch_mode', 'download_upload')  # 'download_upload' or 'direct_forward'
+    batch_mode = data.get('batch_mode', 'download_upload')  # 'download_upload', 'direct_forward', 'pc_download'
     max_batch_gb = data.get('max_batch_gb', 6)
     delete_after = data.get('delete_after', True)
+    delay_seconds = int(data.get('delay_seconds', 5))
     
-    if not base_link or not target_channel:
-        return jsonify({'status': 'error', 'message': 'Base link and target channel are required'}), 400
+    if not base_link:
+        return jsonify({'status': 'error', 'message': 'Base link is required'}), 400
+
+    if batch_mode != 'pc_download' and not target_channel:
+        return jsonify({'status': 'error', 'message': 'Target channel is required for upload / forward mode'}), 400
     
     try:
         start_id = int(start_id)
@@ -1561,7 +1759,7 @@ def start_batch_download():
     # Start in background thread
     t = threading.Thread(
         target=run_batch_process,
-        args=(base_link, start_id, end_id, target_channel, batch_mode, max_batch_gb, delete_after),
+        args=(base_link, start_id, end_id, target_channel, batch_mode, max_batch_gb, delete_after, delay_seconds),
         daemon=True
     )
     t.start()
@@ -1572,8 +1770,14 @@ def start_batch_download():
 @app.route('/api/batch/stop', methods=['POST'])
 def stop_batch_download():
     """Stop batch download process"""
-    global batch_status
+    global batch_status, active_pc_skip_delay
     batch_status['is_running'] = False
+    active_pc_skip_delay.set()
+    for ev in list(active_pc_events.values()):
+        try:
+            ev.set()
+        except Exception:
+            pass
     return jsonify({'status': 'success', 'message': 'Batch process stopping...'})
 
 

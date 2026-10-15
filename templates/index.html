@@ -1313,6 +1313,8 @@
             });
         }
 
+        let currentAddAccTempId = '';
+
         // Send login code for new account
         async function handleAddNewAccountSendCode() {
             const name = document.getElementById('newAccName').value.trim();
@@ -1339,11 +1341,12 @@
 
                 if (res.ok) {
                     if (data.status === 'code_sent') {
+                        currentAddAccTempId = data.temp_id || '';
                         showToast(data.message, 'success');
                         document.getElementById('newAccCodeArea').style.display = 'grid';
                         document.getElementById('newAccVerifyBtn').style.display = 'inline-flex';
                         btn.style.display = 'none';
-                    } else if (data.status === 'already_connected') {
+                    } else if (data.status === 'already_connected' || data.status === 'logged_in') {
                         showToast(data.message, 'success');
                         toggleAddAccountForm(false);
                         loadAccounts();
@@ -1379,7 +1382,7 @@
                 const res = await fetch('/api/accounts/verify', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ phone, code, password })
+                    body: JSON.stringify({ temp_id: currentAddAccTempId, phone, code, password })
                 });
                 const data = await res.json();
 

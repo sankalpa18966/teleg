@@ -7,7 +7,7 @@ Supports: Login via web, Find Channel IDs, Media Transfer, Content Download
 from flask import Flask, render_template, request, jsonify, send_file, session
 from flask_socketio import SocketIO, emit
 from telethon import TelegramClient, utils
-from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError, FloodWaitError
+from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError, PhoneCodeExpiredError, FloodWaitError
 from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument, Channel, Chat, InputMediaUploadedDocument, InputMediaUploadedPhoto, DocumentAttributeVideo, DocumentAttributeFilename, InputSingleMedia
 from telethon.tl.functions.messages import SendMultiMediaRequest
 import asyncio
@@ -713,19 +713,22 @@ def add_account():
             return jsonify({'status': 'logged_in', 'message': f"Account '{new_acc['name']}' already authorized and added!"})
 
         # Request login verification code
-        run_async(temp_client.send_code_request(phone))
+        sent_code = run_async(temp_client.send_code_request(phone))
+        phone_code_hash = getattr(sent_code, 'phone_code_hash', None)
         pending_account_logins[temp_id] = {
             'client': temp_client,
             'temp_id': temp_id,
             'api_id': api_id,
             'api_hash': api_hash,
             'phone': phone,
-            'name': name or f"Account ({phone})"
+            'name': name or f"Account ({phone})",
+            'phone_code_hash': phone_code_hash
         }
         append_login_log(phone, 'code_sent_multi', f"Verification code sent for {phone}")
         return jsonify({
             'status': 'code_sent',
             'temp_id': temp_id,
+            'phone': phone,
             'message': f"Verification code sent to Telegram for {phone}"
         })
 
@@ -743,22 +746,42 @@ def verify_account():
     """Verify code (and optional 2FA password) to complete adding new account."""
     data = request.get_json() or {}
     temp_id = data.get('temp_id', '').strip()
+    phone = data.get('phone', '').strip()
     code = data.get('code', '').strip()
     password = data.get('password', '').strip()
 
-    if not temp_id or temp_id not in pending_account_logins:
+    # Look up pending login by temp_id, or by phone, or single pending
+    pending = None
+    if temp_id and temp_id in pending_account_logins:
+        pending = pending_account_logins[temp_id]
+    elif phone:
+        # Search by phone number
+        clean_p = phone.replace(' ', '').replace('-', '')
+        for tid, p in list(pending_account_logins.items()):
+            p_phone = p.get('phone', '').replace(' ', '').replace('-', '')
+            if p_phone == clean_p or p.get('phone') == phone:
+                temp_id = tid
+                pending = p
+                break
+    if not pending and len(pending_account_logins) == 1:
+        temp_id, pending = next(iter(pending_account_logins.items()))
+
+    if not pending:
         return jsonify({'status': 'error', 'message': 'Session expired. Please click "Send Login Code" again.'}), 400
 
     if not code:
         return jsonify({'status': 'error', 'message': 'Verification code is required'}), 400
 
-    pending = pending_account_logins[temp_id]
     temp_client = pending['client']
     phone = pending['phone']
+    phone_code_hash = pending.get('phone_code_hash')
 
     try:
         try:
-            run_async(temp_client.sign_in(phone, code))
+            if phone_code_hash:
+                run_async(temp_client.sign_in(phone, code, phone_code_hash=phone_code_hash))
+            else:
+                run_async(temp_client.sign_in(phone, code))
         except SessionPasswordNeededError:
             if password:
                 run_async(temp_client.sign_in(password=password))
@@ -769,7 +792,9 @@ def verify_account():
                     'message': 'Two-step verification password (2FA) is required.'
                 })
         except PhoneCodeInvalidError:
-            return jsonify({'status': 'error', 'message': 'Invalid verification code'}), 400
+            return jsonify({'status': 'error', 'message': 'Invalid verification code. Please check and try again.'}), 400
+        except PhoneCodeExpiredError:
+            return jsonify({'status': 'error', 'message': 'The verification code has expired. Please click "Send Login Code" again.'}), 400
 
         # Successfully authorized
         acc_data = load_accounts_data()
@@ -956,9 +981,11 @@ def delete_account():
 
 # ── Legacy Login Endpoints (for backward compatibility) ────────────────────────
 
+_phone_code_hash = None
+
 @app.route('/api/login', methods=['POST'])
 def login():
-    global client, _api_id, _api_hash, _phone, transfer_status
+    global client, _api_id, _api_hash, _phone, _phone_code_hash, transfer_status
     data = request.get_json() or {}
 
     api_id = data.get('api_id', '').strip()
@@ -989,8 +1016,9 @@ def login():
             append_login_log(phone, 'already_authorized')
             return jsonify({'status': 'logged_in', 'message': 'Already logged in!'})
         else:
-            run_async(client.send_code_request(phone))
+            sent_code = run_async(client.send_code_request(phone))
             _phone = phone
+            _phone_code_hash = getattr(sent_code, 'phone_code_hash', None)
             append_login_log(phone, 'code_sent')
             return jsonify({'status': 'code_sent', 'message': 'Verification code sent to Telegram'})
 
@@ -1001,7 +1029,7 @@ def login():
 
 @app.route('/api/verify', methods=['POST'])
 def verify_code():
-    global client, _phone, transfer_status
+    global client, _phone, _phone_code_hash, transfer_status
     data = request.get_json() or {}
     code = data.get('code', '')
     password = data.get('password', '')
@@ -1015,7 +1043,10 @@ def verify_code():
         phone_to_use = _phone or cfg.get('phone', '')
 
         try:
-            run_async(client.sign_in(phone_to_use, code))
+            if _phone_code_hash:
+                run_async(client.sign_in(phone_to_use, code, phone_code_hash=_phone_code_hash))
+            else:
+                run_async(client.sign_in(phone_to_use, code))
             transfer_status['logged_in'] = True
             append_login_log(phone_to_use, 'login_success')
             return jsonify({'status': 'success', 'message': 'Login successful!'})
@@ -1029,7 +1060,10 @@ def verify_code():
                 return jsonify({'status': 'password_required', 'message': '2FA password required'})
         except PhoneCodeInvalidError:
             append_login_log(phone_to_use, 'invalid_code')
-            return jsonify({'status': 'error', 'message': 'Invalid verification code'}), 400
+            return jsonify({'status': 'error', 'message': 'Invalid verification code. Please check and try again.'}), 400
+        except PhoneCodeExpiredError:
+            append_login_log(phone_to_use, 'expired_code')
+            return jsonify({'status': 'error', 'message': 'The verification code has expired. Please click "Send Login Code" again.'}), 400
 
     except Exception as e:
         append_login_log(_phone or '', 'error', str(e))

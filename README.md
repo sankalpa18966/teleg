@@ -95,7 +95,7 @@ Web interface එක start කරන්න:
 py web_app.py
 ```
 
-Browser එකෙන් **http://localhost:3000** වෙත යන්න.
+Browser එකෙන් **http://localhost:4015** වෙත යන්න.
 
 #### Web Features:
 
@@ -296,7 +296,7 @@ chmod +x deploy.sh
 ./deploy.sh
 ```
 
-Browser එකෙන්: `http://YOUR_VPS_IP:3000`
+Browser එකෙන්: `http://YOUR_VPS_IP:4015`
 
 ### VPS Disk Space Management:
 

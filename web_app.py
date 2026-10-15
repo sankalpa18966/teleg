@@ -2214,5 +2214,6 @@ def stop_batch_download():
 # ══════════════════════════════════════════════════════════════════════════════
 
 if __name__ == '__main__':
-    print("🚀 Starting Telegram Media Transfer Web UI on http://0.0.0.0:3000")
-    socketio.run(app, host='0.0.0.0', port=3000, debug=False, allow_unsafe_werkzeug=True)
+    port = int(os.getenv('PORT', 4015))
+    print(f"🚀 Starting Telegram Media Transfer Web UI on http://0.0.0.0:{port}")
+    socketio.run(app, host='0.0.0.0', port=port, debug=False, allow_unsafe_werkzeug=True)

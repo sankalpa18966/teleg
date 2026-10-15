@@ -39,10 +39,10 @@ Script එක automatically:
 
 Browser එකෙන් යන්න:
 ```
-http://YOUR_VPS_IP:3000
+http://YOUR_VPS_IP:4015
 ```
 
-උදාහරණ: `http://45.77.171.72:3000`
+උදාහරණ: `http://45.77.171.72:4015`
 
 ---
 
@@ -150,9 +150,9 @@ rm -rf telegram_downloads/*
 
 ## 🔧 Troubleshooting
 
-### Port 3000 access නැත්නම්:
+### Port 4015 access නැත්නම්:
 ```bash
-ufw allow 3000/tcp
+ufw allow 4015/tcp
 ```
 
 ### Docker errors:
@@ -186,7 +186,7 @@ docker-compose restart
 
 ඔබේ Telegram Media Hub දැන් VPS එකේ run වෙනවා!
 
-- 🌐 Web UI: `http://YOUR_VPS_IP:3000`
+- 🌐 Web UI: `http://YOUR_VPS_IP:4015`
 - 📦 Batch Downloader: Tab 5 (VPS disk safe!)
 - 🔄 Progressive Processing: Auto cleanup
 - 💾 Max Disk Usage: ~6GB

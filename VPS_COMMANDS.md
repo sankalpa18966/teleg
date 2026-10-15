@@ -143,22 +143,22 @@ hostname -I
 
 ### Web UI Access:
 ```
-http://YOUR_VPS_IP:3000
+http://YOUR_VPS_IP:4015
 ```
 
-### Check if Port 3000 is Open:
+### Check if Port 4015 is Open:
 ```bash
-netstat -tuln | grep 3000
+netstat -tuln | grep 4015
 ```
 
 ---
 
 ## 🔧 Troubleshooting
 
-### Port 3000 Access නැත්නම්:
+### Port 4015 Access නැත්නම්:
 ```bash
 # Allow port in firewall
-ufw allow 3000/tcp
+ufw allow 4015/tcp
 
 # Check firewall status
 ufw status

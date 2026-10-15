@@ -51,7 +51,7 @@ case $choice in
         $COMPOSE up -d --build
         echo ""
         echo "✅ App started!"
-        echo "🌐 Access: http://$(hostname -I | awk '{print $1}'):3000"
+        echo "🌐 Access: http://$(hostname -I | awk '{print $1}'):4015"
         ;;
     2)
         echo "📋 Showing logs (Press Ctrl+C to exit)..."
@@ -73,7 +73,7 @@ case $choice in
         rm -rf session_data/* telegram_downloads/*
         $COMPOSE up -d --build
         echo "✅ Fresh start complete!"
-        echo "🌐 Access: http://$(hostname -I | awk '{print $1}'):3000"
+        echo "🌐 Access: http://$(hostname -I | awk '{print $1}'):4015"
         ;;
     6)
         echo "💾 Disk Space:"

@@ -20,8 +20,8 @@ COPY . .
 # Create directories
 RUN mkdir -p telegram_downloads session_data
 
-# Expose port 3000
-EXPOSE 3000
+# Expose port 4015
+EXPOSE 4015
 
 # Run the Web App UI
 CMD ["python", "-u", "web_app.py"]

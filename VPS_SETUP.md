@@ -58,9 +58,9 @@ chmod +x deploy.sh
 Deployment එක සාර්ථක වූ පසු ඔබේ Browser එකෙන්:
 
 ```
-http://YOUR_VPS_IP:3000
+http://YOUR_VPS_IP:4015
 ```
-*(උදා: `http://45.77.171.72:3000`)*
+*(උදා: `http://45.77.171.72:4015`)*
 
 ### Web UI එක හරහා:
 1. **Tab 1 (Credentials & Login)** එකෙන් ඔබේ **API ID**, **API Hash**, සහ **Phone Number** ඇතුළත් කර Telegram එකට Log වන්න.
@@ -189,10 +189,10 @@ docker-compose restart
 docker-compose down
 ```
 
-### 🔒 Firewall Access (Port 3000 Open කිරීමට අවශ්‍ය නම්):
+### 🔒 Firewall Access (Port 4015 Open කිරීමට අවශ්‍ය නම්):
 VPS එකේ ufw තිබේ නම්:
 ```bash
-ufw allow 3000/tcp
+ufw allow 4015/tcp
 ```
 
 ### 🧹 Clean Everything (Fresh Start):

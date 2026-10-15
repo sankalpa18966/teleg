@@ -1203,7 +1203,7 @@
                     renderAccountsList(data.accounts, data.default_account_id);
                     populateAllAccountDropdowns(data.accounts, data.default_account_id);
 
-                    const anyConnected = data.accounts.some(a => a.is_connected);
+                    const anyConnected = data.accounts.some(a => (a.is_connected || a.logged_in));
                     setLoggedInState(anyConnected);
                 }
             } catch (err) {
@@ -1236,6 +1236,7 @@
 
             container.innerHTML = accounts.map(acc => {
                 const isDef = acc.id === defaultId || acc.is_default;
+                const isConnected = !!(acc.is_connected || acc.logged_in);
                 return `
                     <div style="display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; background: rgba(15, 23, 42, 0.6); border: 1.5px solid ${isDef ? 'rgba(56, 189, 248, 0.4)' : 'var(--input-border)'}; border-radius: 14px; gap: 15px; flex-wrap: wrap;">
                         <div style="display: flex; align-items: center; gap: 14px;">
@@ -1246,8 +1247,8 @@
                                 <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
                                     <span style="font-weight: 600; font-size: 14px; color: #fff;">${acc.name || 'Telegram Account'}</span>
                                     ${isDef ? '<span style="font-size: 10px; background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3); padding: 2px 7px; border-radius: 10px; font-weight: 600;">⭐ PRIMARY / DEFAULT</span>' : ''}
-                                    <span style="font-size: 10px; background: ${acc.is_connected ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)'}; color: ${acc.is_connected ? '#10b981' : '#ef4444'}; border: 1px solid ${acc.is_connected ? 'rgba(16, 185, 129, 0.3)' : 'rgba(239, 68, 68, 0.3)'}; padding: 2px 7px; border-radius: 10px; font-weight: 600;">
-                                        ${acc.is_connected ? 'Active Session' : 'Disconnected'}
+                                    <span style="font-size: 10px; background: ${isConnected ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)'}; color: ${isConnected ? '#10b981' : '#ef4444'}; border: 1px solid ${isConnected ? 'rgba(16, 185, 129, 0.3)' : 'rgba(239, 68, 68, 0.3)'}; padding: 2px 7px; border-radius: 10px; font-weight: 600;">
+                                        ${isConnected ? 'Active Session' : 'Disconnected / Logged Out'}
                                     </span>
                                 </div>
                                 <div style="font-size: 12px; color: var(--text-muted); margin-top: 3px; font-family: monospace;">
@@ -1261,7 +1262,10 @@
                                     <i class="fa-regular fa-star"></i> Set Default
                                 </button>
                             ` : ''}
-                            <button onclick="deleteAccount('${acc.id}')" class="btn btn-danger" style="font-size: 12px; padding: 6px 12px;" title="Remove this account">
+                            <button onclick="logoutAccount('${acc.id}')" class="btn btn-secondary" style="font-size: 12px; padding: 6px 12px; border-color: rgba(239, 68, 68, 0.4); color: #f87171;" title="Log out from Telegram session">
+                                <i class="fa-solid fa-right-from-bracket"></i> Logout
+                            </button>
+                            <button onclick="deleteAccount('${acc.id}')" class="btn btn-danger" style="font-size: 12px; padding: 6px 12px;" title="Remove this account completely">
                                 <i class="fa-solid fa-trash-can"></i>
                             </button>
                         </div>
@@ -1421,9 +1425,33 @@
             }
         }
 
+        // Logout account
+        async function logoutAccount(accId) {
+            if (!confirm('Are you sure you want to log out of this Telegram account session?')) {
+                return;
+            }
+            try {
+                const res = await fetch('/api/accounts/logout', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ account_id: accId })
+                });
+                const data = await res.json();
+                if (res.ok && data.status === 'success') {
+                    showToast(data.message || 'Account logged out', 'info');
+                    loadAccounts();
+                    loadLoginLogs();
+                } else {
+                    showToast(data.message || 'Failed to logout account', 'error');
+                }
+            } catch (err) {
+                showToast('Error: ' + err.message, 'error');
+            }
+        }
+
         // Delete account
         async function deleteAccount(accId) {
-            if (!confirm('Are you sure you want to remove this Telegram account session?')) {
+            if (!confirm('Are you sure you want to remove this Telegram account completely?')) {
                 return;
             }
             try {
@@ -1436,6 +1464,7 @@
                 if (res.ok && data.status === 'success') {
                     showToast('Account removed', 'info');
                     loadAccounts();
+                    loadLoginLogs();
                 } else {
                     showToast(data.message || 'Failed to remove account', 'error');
                 }

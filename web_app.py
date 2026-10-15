@@ -118,21 +118,21 @@ def save_config(api_id, api_hash, phone):
 
 
 def load_accounts_data():
-    """Load accounts registry. Auto-migrates legacy config/session if accounts.json is missing."""
+    """Load accounts registry. Auto-migrates legacy config/session ONLY if accounts.json is missing."""
     if os.path.exists(ACCOUNTS_FILE):
         try:
             with open(ACCOUNTS_FILE, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-                if isinstance(data, dict) and 'accounts' in data and len(data['accounts']) > 0:
+                if isinstance(data, dict) and 'accounts' in data:
                     return data
         except Exception as e:
             print(f"Error reading accounts file: {e}")
 
-    # Auto-migration from legacy single-account setup
+    # Auto-migration from legacy single-account setup (only when accounts.json never existed)
     data = {'accounts': []}
     cfg = load_config()
     legacy_session = os.path.join(SESSION_DIR, 'session.session')
-    if os.path.exists(legacy_session) or cfg.get('api_id'):
+    if os.path.exists(legacy_session) and cfg.get('api_id'):
         phone = cfg.get('phone', '')
         data['accounts'].append({
             'id': 'acc_default',
@@ -144,7 +144,7 @@ def load_accounts_data():
             'is_default': True,
             'created_at': datetime.now().isoformat()
         })
-        save_accounts_data(data)
+    save_accounts_data(data)
     return data
 
 
@@ -644,6 +644,7 @@ def get_accounts():
     """Return all configured Telegram accounts with authorization status."""
     data = load_accounts_data()
     acc_list = []
+    default_id = None
     for acc in data.get('accounts', []):
         is_auth = False
         try:
@@ -651,15 +652,24 @@ def get_accounts():
             is_auth = run_async(c.is_user_authorized())
         except Exception:
             is_auth = False
+        if acc.get('is_default'):
+            default_id = acc['id']
         acc_list.append({
             'id': acc['id'],
             'name': acc.get('name') or acc.get('phone') or acc['id'],
             'phone': acc.get('phone', ''),
             'api_id': acc.get('api_id', ''),
             'is_default': acc.get('is_default', False),
-            'logged_in': is_auth
+            'logged_in': is_auth,
+            'is_connected': is_auth
         })
-    return jsonify({'status': 'success', 'accounts': acc_list})
+    if not default_id and acc_list:
+        default_id = acc_list[0]['id']
+    return jsonify({
+        'status': 'success',
+        'accounts': acc_list,
+        'default_account_id': default_id
+    })
 
 
 @app.route('/api/accounts/add', methods=['POST'])
@@ -814,6 +824,71 @@ def set_default_account():
     return jsonify({'status': 'success', 'message': 'Default account updated'})
 
 
+@app.route('/api/accounts/logout', methods=['POST'])
+def logout_account():
+    """Log out a Telegram account, disconnect, and remove its session."""
+    data = request.get_json() or {}
+    account_id = data.get('account_id')
+    if not account_id:
+        return jsonify({'status': 'error', 'message': 'account_id is required'}), 400
+
+    acc_data = load_accounts_data()
+    accounts = acc_data.get('accounts', [])
+    target = None
+    for acc in accounts:
+        if acc['id'] == account_id:
+            target = acc
+            break
+
+    if not target:
+        return jsonify({'status': 'error', 'message': 'Account not found'}), 404
+
+    # Log out Telegram client
+    c = clients_pool.pop(account_id, None)
+    if not c:
+        try:
+            c = get_client_for_account(account_id)
+        except Exception:
+            c = None
+
+    if c:
+        try:
+            run_async(c.log_out())
+        except Exception:
+            try:
+                run_async(c.disconnect())
+            except Exception:
+                pass
+
+    # Remove session files
+    session_file_name = target.get('session_file', f'session_{account_id}')
+    if session_file_name:
+        for ext in ['.session', '.session-journal']:
+            sf_path = os.path.join(SESSION_DIR, session_file_name + ext)
+            if os.path.exists(sf_path):
+                try:
+                    os.remove(sf_path)
+                except Exception:
+                    pass
+
+    # If it was the primary/default session or last account, clear config.json as well
+    if session_file_name == 'session' or target.get('id') == 'acc_default' or len(accounts) <= 1:
+        if os.path.exists(CONFIG_FILE):
+            try:
+                os.remove(CONFIG_FILE)
+            except Exception:
+                pass
+
+    accounts.remove(target)
+    if target.get('is_default') and accounts:
+        accounts[0]['is_default'] = True
+
+    save_accounts_data(acc_data)
+    check_login_status()
+    append_login_log(target.get('phone', ''), 'account_logged_out', f"Logged out account '{target.get('name')}'")
+    return jsonify({'status': 'success', 'message': f"Account '{target.get('name')}' logged out successfully"})
+
+
 @app.route('/api/accounts/delete', methods=['POST'])
 def delete_account():
     """Delete an account and remove its session file."""
@@ -833,22 +908,39 @@ def delete_account():
     if not target:
         return jsonify({'status': 'error', 'message': 'Account not found'}), 404
 
-    # Disconnect client
-    if account_id in clients_pool:
-        c = clients_pool.pop(account_id, None)
-        if c:
+    # Disconnect & log out client
+    c = clients_pool.pop(account_id, None)
+    if not c:
+        try:
+            c = get_client_for_account(account_id)
+        except Exception:
+            c = None
+
+    if c:
+        try:
+            run_async(c.log_out())
+        except Exception:
             try:
                 run_async(c.disconnect())
             except Exception:
                 pass
 
-    # Remove session file if non-default
-    session_file_name = target.get('session_file')
-    if session_file_name and session_file_name != 'session':
-        sf_path = os.path.join(SESSION_DIR, session_file_name + '.session')
-        if os.path.exists(sf_path):
+    # Remove session files unconditionally
+    session_file_name = target.get('session_file', f'session_{account_id}')
+    if session_file_name:
+        for ext in ['.session', '.session-journal']:
+            sf_path = os.path.join(SESSION_DIR, session_file_name + ext)
+            if os.path.exists(sf_path):
+                try:
+                    os.remove(sf_path)
+                except Exception:
+                    pass
+
+    # If it was the default session or last account, clear config.json
+    if session_file_name == 'session' or target.get('id') == 'acc_default' or len(accounts) <= 1:
+        if os.path.exists(CONFIG_FILE):
             try:
-                os.remove(sf_path)
+                os.remove(CONFIG_FILE)
             except Exception:
                 pass
 
@@ -857,6 +949,7 @@ def delete_account():
         accounts[0]['is_default'] = True
 
     save_accounts_data(acc_data)
+    check_login_status()
     append_login_log(target.get('phone', ''), 'account_deleted', f"Removed account '{target.get('name')}'")
     return jsonify({'status': 'success', 'message': f"Account '{target.get('name')}' removed"})
 
@@ -948,9 +1041,36 @@ def logout():
     global transfer_status, client
     try:
         if client:
-            run_async(client.log_out())
+            try:
+                run_async(client.log_out())
+            except Exception:
+                pass
         reset_client()
         transfer_status['logged_in'] = False
+
+        # Clean legacy session files
+        for ext in ['.session', '.session-journal']:
+            legacy_sf = os.path.join(SESSION_DIR, 'session' + ext)
+            if os.path.exists(legacy_sf):
+                try:
+                    os.remove(legacy_sf)
+                except Exception:
+                    pass
+
+        if os.path.exists(CONFIG_FILE):
+            try:
+                os.remove(CONFIG_FILE)
+            except Exception:
+                pass
+
+        acc_data = load_accounts_data()
+        accounts = acc_data.get('accounts', [])
+        acc_data['accounts'] = [a for a in accounts if a.get('id') != 'acc_default']
+        if acc_data['accounts']:
+            acc_data['accounts'][0]['is_default'] = True
+        save_accounts_data(acc_data)
+        check_login_status()
+
         append_login_log(_phone or '', 'logout')
         return jsonify({'status': 'success', 'message': 'Logged out'})
     except Exception as e:
